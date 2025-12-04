@@ -1142,7 +1142,7 @@ async function handleAddWeather(e) {
 }
 
 // ============== Plant Actions ==============
-function viewPlant(plantId) {
+async function viewPlant(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
     
@@ -1184,6 +1184,19 @@ function viewPlant(plantId) {
                     <p>Height: ${latestGrowth.height_cm || '?'} cm | Health: ${latestGrowth.health_rating || '?'}/10</p>
                 </div>
             ` : ''}
+            
+            <!-- Plant Charts -->
+            <div class="plant-charts">
+                <div class="plant-chart-container">
+                    <h4>📈 Growth History</h4>
+                    <canvas id="plantGrowthChart"></canvas>
+                </div>
+                <div class="plant-chart-container">
+                    <h4>💧 Watering History</h4>
+                    <canvas id="plantWateringChart"></canvas>
+                </div>
+            </div>
+            
             <div class="form-group">
                 <label>Notes</label>
                 <p>${plant.notes || 'No notes'}</p>
@@ -1195,6 +1208,107 @@ function viewPlant(plantId) {
             </div>
         </div>
     `);
+    
+    // Load and render charts after modal is shown
+    await renderPlantDetailCharts(plantId);
+}
+
+async function renderPlantDetailCharts(plantId) {
+    // Growth Chart
+    const growthCtx = document.getElementById('plantGrowthChart')?.getContext('2d');
+    if (growthCtx) {
+        try {
+            const response = await fetch(`${API_BASE}/charts/growth/${plantId}`);
+            const data = await response.json();
+            
+            if (data.dates?.length > 0) {
+                new Chart(growthCtx, {
+                    type: 'line',
+                    data: {
+                        labels: data.dates.map(d => d.slice(5)), // MM-DD format
+                        datasets: [{
+                            label: 'Height (cm)',
+                            data: data.heights,
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#94a3b8', font: { size: 10 } }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: '#94a3b8', font: { size: 10 } }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            } else {
+                growthCtx.canvas.parentElement.innerHTML += '<p class="no-data-small">No growth data yet</p>';
+            }
+        } catch (error) {
+            console.error('Failed to load growth chart:', error);
+        }
+    }
+    
+    // Watering Chart
+    const waterCtx = document.getElementById('plantWateringChart')?.getContext('2d');
+    if (waterCtx) {
+        try {
+            const response = await fetch(`${API_BASE}/charts/watering/${plantId}`);
+            const data = await response.json();
+            
+            if (data.dates?.length > 0) {
+                new Chart(waterCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.dates.map(d => d.slice(5)), // MM-DD format
+                        datasets: [{
+                            label: 'Water (ml)',
+                            data: data.amounts,
+                            backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                            borderColor: '#3b82f6',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#94a3b8', font: { size: 10 } }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: '#94a3b8', font: { size: 10 } }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            } else {
+                waterCtx.canvas.parentElement.innerHTML += '<p class="no-data-small">No watering data yet</p>';
+            }
+        } catch (error) {
+            console.error('Failed to load watering chart:', error);
+        }
+    }
 }
 
 // Show plant label with QR code for printing
@@ -2261,3 +2375,4 @@ window.editRecipe = editRecipe;
 window.deleteRecipe = deleteRecipe;
 window.editProduct = editProduct;
 window.deleteProduct = deleteProduct;
+window.showLabel = showLabel;

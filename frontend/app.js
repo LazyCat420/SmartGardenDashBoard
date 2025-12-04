@@ -19,6 +19,8 @@ let growthChart = null;
 let wateringChart = null;
 let budgetCategoryChart = null;
 let budgetMonthlyChart = null;
+let plantGrowthChart = null;
+let plantWateringChart = null;
 
 // ============== DOM Elements ==============
 const elements = {
@@ -900,6 +902,9 @@ function showModal(title, content) {
 
 function closeModal() {
     elements.modalOverlay.classList.remove('active');
+    // Destroy any plant detail charts to free memory and prevent resize issues
+    if (plantGrowthChart) { try { plantGrowthChart.destroy(); } catch(e) {} plantGrowthChart = null; }
+    if (plantWateringChart) { try { plantWateringChart.destroy(); } catch(e) {} plantWateringChart = null; }
 }
 
 function showAddPlantModal() {
@@ -1214,6 +1219,16 @@ async function viewPlant(plantId) {
 }
 
 async function renderPlantDetailCharts(plantId) {
+    // Destroy any existing detail charts to avoid duplication
+    if (plantGrowthChart) {
+        try { plantGrowthChart.destroy(); } catch(e) {}
+        plantGrowthChart = null;
+    }
+    if (plantWateringChart) {
+        try { plantWateringChart.destroy(); } catch(e) {}
+        plantWateringChart = null;
+    }
+
     // Growth Chart
     const growthCtx = document.getElementById('plantGrowthChart')?.getContext('2d');
     if (growthCtx) {
@@ -1221,8 +1236,15 @@ async function renderPlantDetailCharts(plantId) {
             const response = await fetch(`${API_BASE}/charts/growth/${plantId}`);
             const data = await response.json();
             
+            const growthContainer = growthCtx.canvas.parentElement;
+            const growthCanvas = growthContainer.querySelector('canvas');
+            let existingNoData = growthContainer.querySelector('.no-data-small');
+
             if (data.dates?.length > 0) {
-                new Chart(growthCtx, {
+                // Ensure canvas is visible and no-data message is removed
+                if (growthCanvas) growthCanvas.style.display = 'block';
+                if (existingNoData) { existingNoData.remove(); existingNoData = null; }
+                plantGrowthChart = new Chart(growthCtx, {
                     type: 'line',
                     data: {
                         labels: data.dates.map(d => d.slice(5)), // MM-DD format
@@ -1255,8 +1277,15 @@ async function renderPlantDetailCharts(plantId) {
                         }
                     }
                 });
+                plantGrowthChart.resize();
             } else {
-                growthCtx.canvas.parentElement.innerHTML += '<p class="no-data-small">No growth data yet</p>';
+                if (growthCanvas) growthCanvas.style.display = 'none';
+                if (!existingNoData) {
+                    const nd = document.createElement('p');
+                    nd.className = 'no-data-small';
+                    nd.textContent = 'No growth data yet';
+                    growthContainer.appendChild(nd);
+                }
             }
         } catch (error) {
             console.error('Failed to load growth chart:', error);
@@ -1269,9 +1298,15 @@ async function renderPlantDetailCharts(plantId) {
         try {
             const response = await fetch(`${API_BASE}/charts/watering/${plantId}`);
             const data = await response.json();
-            
+            const waterContainer = waterCtx.canvas.parentElement;
+            const waterCanvas = waterContainer.querySelector('canvas');
+            let existingNoData2 = waterContainer.querySelector('.no-data-small');
+
             if (data.dates?.length > 0) {
-                new Chart(waterCtx, {
+                // Ensure canvas is visible and remove any no-data message
+                if (waterCanvas) waterCanvas.style.display = 'block';
+                if (existingNoData2) { existingNoData2.remove(); existingNoData2 = null; }
+                plantWateringChart = new Chart(waterCtx, {
                     type: 'bar',
                     data: {
                         labels: data.dates.map(d => d.slice(5)), // MM-DD format
@@ -1302,8 +1337,15 @@ async function renderPlantDetailCharts(plantId) {
                         }
                     }
                 });
+                plantWateringChart.resize();
             } else {
-                waterCtx.canvas.parentElement.innerHTML += '<p class="no-data-small">No watering data yet</p>';
+                if (waterCanvas) waterCanvas.style.display = 'none';
+                if (!existingNoData2) {
+                    const nd2 = document.createElement('p');
+                    nd2.className = 'no-data-small';
+                    nd2.textContent = 'No watering data yet';
+                    waterContainer.appendChild(nd2);
+                }
             }
         } catch (error) {
             console.error('Failed to load watering chart:', error);
@@ -1330,8 +1372,8 @@ async function showLabel(plantId) {
                 <span><strong>Plant:</strong> ${displayName}</span>
             </div>
             <div class="form-actions">
-                <button class="btn btn-primary" onclick="downloadLabel(${plantId})">📥 Download PNG</button>
-                <button class="btn btn-secondary" onclick="printLabel(${plantId})">🖨️ Print</button>
+                <button class="btn btn-primary" onclick="downloadLabel('${plantId}')">📥 Download PNG</button>
+                <button class="btn btn-secondary" onclick="printLabel('${plantId}')">🖨️ Print</button>
                 <button class="btn btn-secondary" onclick="closeModal()">Close</button>
             </div>
         </div>

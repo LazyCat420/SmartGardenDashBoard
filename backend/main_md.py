@@ -1068,8 +1068,81 @@ def set_storage_path():
 
 # ============== Main ==============
 
+def get_local_ip():
+    """Get the local IP address for network access"""
+    import socket
+    try:
+        # Connect to an external address to determine local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
+
 if __name__ == '__main__':
+    import argparse
+    import ssl
+    
+    parser = argparse.ArgumentParser(description='Smart Garden Dashboard Server')
+    parser.add_argument('--https', action='store_true', help='Enable HTTPS')
+    parser.add_argument('--port', type=int, default=5000, help='Port to run on (default: 5000)')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0 for network access)')
+    args = parser.parse_args()
+    
     print("Initializing MD storage...")
     ensure_directories()
     print(f"Storage path: {get_storage_path()}")
-    app.run(debug=True)
+    
+    local_ip = get_local_ip()
+    
+    if args.https:
+        # Generate or use existing SSL certificates
+        cert_dir = os.path.dirname(os.path.abspath(__file__))
+        cert_file = os.path.join(cert_dir, 'cert.pem')
+        key_file = os.path.join(cert_dir, 'key.pem')
+        
+        # Check if certificates exist, if not generate them
+        if not os.path.exists(cert_file) or not os.path.exists(key_file):
+            print("SSL certificates not found. Generating...")
+            from generate_ssl import generate_ssl_certificates
+            cert_file, key_file = generate_ssl_certificates()
+        
+        # Create SSL context
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+        
+        print(f"\n{'='*60}")
+        print(f"🌱 Smart Garden Dashboard - HTTPS Server")
+        print(f"{'='*60}")
+        print(f"  Local:   https://localhost:{args.port}")
+        print(f"  Network: https://{local_ip}:{args.port}")
+        print(f"{'='*60}")
+        print(f"⚠️  Note: You'll need to accept the self-signed certificate")
+        print(f"    in your browser on first visit.")
+        print(f"{'='*60}\n")
+        
+        app.run(
+            host=args.host,
+            port=args.port,
+            debug=True,
+            ssl_context=context
+        )
+    else:
+        print(f"\n{'='*60}")
+        print(f"🌱 Smart Garden Dashboard - HTTP Server")
+        print(f"{'='*60}")
+        print(f"  Local:   http://localhost:{args.port}")
+        print(f"  Network: http://{local_ip}:{args.port}")
+        print(f"{'='*60}")
+        print(f"  Tip: Use --https flag for secure connections")
+        print(f"{'='*60}\n")
+        
+        app.run(
+            host=args.host,
+            port=args.port,
+            debug=True
+        )
+

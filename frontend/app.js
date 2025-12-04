@@ -4,7 +4,8 @@
  */
 
 // ============== Configuration ==============
-const API_BASE = 'http://localhost:5000/api';
+// Dynamically determine API base URL based on current location
+const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 
 // ============== State ==============
 let plants = [];

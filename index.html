@@ -1995,7 +1995,10 @@
                   style="min-height: 150px;"
                 ></textarea>
               </div>
-              <button type="submit" class="btn btn-primary">Parse &amp; Save Entry</button>
+              <div style="display:flex; gap: 10px; align-items:center;">
+                <button type="submit" class="btn btn-primary">Parse &amp; Save Entry</button>
+                <button type="button" id="smart-process-btn" class="btn btn-secondary">✨ Smart Process with AI</button>
+              </div>
             </form>
           </div>
 
@@ -2416,6 +2419,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <script>
     // Unit Conversion Constants & Functions
     const CONVERSIONS = {
@@ -3729,6 +3733,41 @@
       updateStats();
     }
 
+    async function deletePlantsByType(type) {
+      if (!confirm(`Are you sure you want to delete ALL ${type} plants? This cannot be undone.`)) {
+        return;
+      }
+      
+      const garden = getCurrentGarden();
+      if (!garden) return;
+      
+      const plantsToDelete = garden.plants.filter(p => p.type === type);
+      
+      if (appState.__backendLoaded) {
+          // Delete via API
+          const API_URL = 'http://localhost:5000/api';
+          for (const plant of plantsToDelete) {
+            try {
+                await fetch(`${API_URL}/plants/${plant.id}`, { method: 'DELETE' });
+            } catch (e) {
+                console.error('Error deleting plant:', plant.id, e);
+            }
+          }
+          // Reload data
+          if (window.loadBackendData) {
+              await window.loadBackendData();
+              return;
+          }
+      }
+      
+      // Fallback for local state only
+      garden.plants = garden.plants.filter(p => p.type !== type);
+      renderPlants();
+      renderGardenGrid();
+      updateStats();
+      updateDashboard();
+    }
+
     function renderPlants() {
       const container = document.getElementById('plants-container');
       const garden = getCurrentGarden();
@@ -3782,6 +3821,7 @@
             <div class="tree-header" onclick="toggleTreeNode('type-${type.replace(/\s/g, '-')}')" id="header-type-${type.replace(/\s/g, '-')}">
               <span class="tree-toggle">▶</span>
               <strong style="flex: 1;">${type}</strong>
+              <button class="btn btn-danger btn-xs" style="margin-right: 10px; padding: 2px 6px; font-size: 10px;" onclick="event.stopPropagation(); deletePlantsByType('${type}')">Delete All</button>
               <span class="tree-count">(${totalPlants} plant${totalPlants !== 1 ? 's' : ''})</span>
             </div>
             <div class="tree-content" id="content-type-${type.replace(/\s/g, '-')}">
@@ -3942,8 +3982,8 @@
             ${applications.length > 0 ? `
               <p><strong>Last:</strong> ${formatDate(applications[0].date)}</p>
               <p><strong>Amount:</strong> ${applications[0].amount.value} ${applications[0].amount.unit}</p>
-              <p><strong>Cost:</strong> $${applications[0].appliedCost.toFixed(2)}</p>
-              <p><strong>Total spent:</strong> $${totalCost.toFixed(2)}</p>
+              <p><strong>Cost:</strong> $${(applications[0].appliedCost || 0).toFixed(2)}</p>
+              <p><strong>Total spent:</strong> $${(totalCost || 0).toFixed(2)}</p>
             ` : '<p style="color: var(--color-text-secondary);">No feedings recorded</p>'}
           </div>
           
@@ -4254,7 +4294,7 @@
       const plant = garden.plants.find(p => p.id === plantId);
       const containerId = `fertilization-table-${plantId}`;
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container || !plant) return;
       
       const applications = appState.feedingApplications.filter(a => a.plantId === plantId).reverse();
       
@@ -4332,7 +4372,7 @@
       const plant = garden.plants.find(p => p.id === plantId);
       const containerId = `recipes-table-${plantId}`;
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container || !plant) return;
       
       const recipes = plant.feedingRecipes ? plant.feedingRecipes.map(rid => appState.feedingRecipes.find(r => r.id === rid)).filter(r => r) : [];
       
@@ -4395,7 +4435,7 @@
       const plant = garden.plants.find(p => p.id === plantId);
       const containerId = `journal-table-${plantId}`;
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container || !plant) return;
       
       const linkedEntries = plant.journalEntries ? plant.journalEntries.length : 0;
       
@@ -4454,7 +4494,7 @@
       const plant = garden.plants.find(p => p.id === plantId);
       const containerId = `photos-table-${plantId}`;
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container || !plant) return;
       
       const photos = plant.photo ? [plant.photo] : [];
       
@@ -4508,7 +4548,7 @@
       const plant = garden.plants.find(p => p.id === plantId);
       const containerId = `height-table-${plantId}`;
       const container = document.getElementById(containerId);
-      if (!container) return;
+      if (!container || !plant) return;
       
       if (!plant.heightHistory || plant.heightHistory.length === 0) {
         container.innerHTML = '<p style="color: var(--color-text-secondary);">No height records</p><button class="btn btn-primary btn-small" style="margin-top: var(--space-12); width: 100%;" onclick="addHeightEntry(\'' + plantId + '\')">+ Add Height Entry</button>';
@@ -4859,63 +4899,86 @@
       
       container.innerHTML = appState.journal.filter(e => !e.garden || e.garden === appState.currentGardenId).map(entry => {
         const garden = appState.gardens.find(g => g.id === entry.garden);
-        const plantBadges = entry.plantsMentioned && entry.plantsMentioned.length > 0 ? 
-          entry.plantsMentioned.map(plantId => {
-            const plant = garden ? garden.plants.find(p => p.id === plantId) : null;
+        // Build a parsed object for rendering: either entry.parsed (client-side), or from server-provided 'tags' (processed_data)
+        let parsed = entry.parsed || {};
+        if ((!parsed || Object.keys(parsed).length === 0) && entry.processed_data) {
+          const pd = entry.processed_data; // processed_data from server
+          parsed = {
+            generalNotes: pd.summary ? [pd.summary] : [],
+            nutrientsUsed: [],
+            plantHeights: [],
+            plantTypes: [],
+            plantsMentioned: []
+          };
+          (pd.actions || []).forEach(a => {
+            if (a.action_type === 'height_measurement') {
+              parsed.plantHeights.push({ name: a.plant, height: a.height, unit: a.unit || 'cm' });
+            } else if (a.action_type === 'feeding') {
+              parsed.nutrientsUsed.push(a.details || a.amount || 'Feeding');
+            }
+          });
+          parsed.plantsMentioned = pd.plants_mentioned || [];
+        }
+
+        const plantBadges = parsed.plantsMentioned && parsed.plantsMentioned.length > 0 ?
+          parsed.plantsMentioned.map(plantNameOrId => {
+            // Try to find plant by ID first, otherwise find by name match
+            let plant = garden ? garden.plants.find(p => p.id === plantNameOrId) : null;
+            if (!plant && garden) plant = garden.plants.find(p => p.name && p.name.toLowerCase().includes(String(plantNameOrId).toLowerCase()));
             return plant ? `<span class="health-badge healthy" style="font-size: var(--font-size-xs); padding: var(--space-4) var(--space-6);">${plant.name}</span>` : '';
           }).join(' ') : '';
         let parsedHTML = '';
         
-        if (entry.parsed.generalNotes && entry.parsed.generalNotes.length > 0) {
+        if (parsed.generalNotes && parsed.generalNotes.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">General Notes</div>
-              <div class="category-content">${entry.parsed.generalNotes.join(' ')}</div>
+              <div class="category-content">${parsed.generalNotes.join(' ')}</div>
             </div>
           `;
         }
         
-        if (entry.parsed.nutrientsUsed && entry.parsed.nutrientsUsed.length > 0) {
+        if (parsed.nutrientsUsed && parsed.nutrientsUsed.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">Nutrients Used</div>
-              <div class="category-content">${entry.parsed.nutrientsUsed.join('; ')}</div>
+              <div class="category-content">${parsed.nutrientsUsed.join('; ')}</div>
             </div>
           `;
         }
         
-        if (entry.parsed.plantHeights && entry.parsed.plantHeights.length > 0) {
+        if (parsed.plantHeights && parsed.plantHeights.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">Plant Heights</div>
-              <div class="category-content">${entry.parsed.plantHeights.map(h => `${h.name}: ${h.height}${h.unit}`).join(', ')}</div>
+              <div class="category-content">${parsed.plantHeights.map(h => `${h.name}: ${h.height}${h.unit}`).join(', ')}</div>
             </div>
           `;
         }
         
-        if (entry.parsed.plantTypes.length > 0) {
+        if (parsed.plantTypes && parsed.plantTypes.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">Plant Types</div>
-              <div class="category-content">${[...new Set(entry.parsed.plantTypes)].join(', ')}</div>
+              <div class="category-content">${[...new Set(parsed.plantTypes)].join(', ')}</div>
             </div>
           `;
         }
         
-        if (entry.parsed.dates.length > 0) {
+        if (parsed.dates && parsed.dates.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">Dates</div>
-              <div class="category-content">${entry.parsed.dates.join(', ')}</div>
+              <div class="category-content">${parsed.dates.join(', ')}</div>
             </div>
           `;
         }
         
-        if (entry.parsed.ipm.length > 0) {
+        if (parsed.ipm && parsed.ipm.length > 0) {
           parsedHTML += `
             <div class="parsed-category">
               <div class="category-title">IPM (Pest Management)</div>
-              <div class="category-content">${entry.parsed.ipm.join('; ')}</div>
+              <div class="category-content">${parsed.ipm.join('; ')}</div>
             </div>
           `;
         }
@@ -4924,7 +4987,7 @@
           <div class="journal-entry">
             <div class="journal-date">${formatDateTime(entry.date)}</div>
             ${plantBadges ? `<div style="margin-bottom: var(--space-8);">${plantBadges}</div>` : ''}
-            <div class="journal-text">${entry.text}</div>
+            <div class="journal-text">${entry.content || entry.text || ''}</div>
             ${parsedHTML ? `<div class="parsed-section">${parsedHTML}</div>` : ''}
           </div>
         `;
@@ -4932,8 +4995,8 @@
     }
 
     // Dashboard
-    let dashboardHeightChart = null;
-    let dashboardFertChart = null;
+    var dashboardHeightChart = null;
+    var dashboardFertChart = null;
     const dashboardState = {
       selectedPlantsHeight: [],
       selectedPlantsFert: []
@@ -5112,7 +5175,7 @@
       const feedingsHTML = recentFeedings.length > 0 ? recentFeedings.map(a => {
         const plant = garden.plants.find(p => p.id === a.plantId);
         const recipe = appState.feedingRecipes.find(r => r.id === a.recipeId);
-        return `<div style="margin-bottom: var(--space-8); padding-bottom: var(--space-8); border-bottom: 1px solid var(--color-border);"><strong>${formatDate(a.date)}</strong> - ${plant ? plant.name : 'Unknown'}<br><span style="font-size: var(--font-size-xs);">${recipe ? recipe.name : 'Unknown'} ($${a.appliedCost.toFixed(2)})</span></div>`;
+        return `<div style="margin-bottom: var(--space-8); padding-bottom: var(--space-8); border-bottom: 1px solid var(--color-border);"><strong>${formatDate(a.date)}</strong> - ${plant ? plant.name : 'Unknown'}<br><span style="font-size: var(--font-size-xs);">${recipe ? recipe.name : 'Unknown'} ($${(a.appliedCost || 0).toFixed(2)})</span></div>`;
       }).join('') : '<p>No feedings recorded</p>';
       document.getElementById('dashboard-feedings').innerHTML = feedingsHTML;
 
@@ -5321,15 +5384,16 @@
       });
       const monthlySpent = monthlyApplications.reduce((sum, a) => sum + a.appliedCost, 0);
       
-      document.getElementById('total-plants').textContent = totalPlants;
-      document.getElementById('total-quadrants').textContent = totalQuadrants;
-      document.getElementById('total-entries').textContent = totalEntries;
-      document.getElementById('dash-total-plants').textContent = totalPlants;
-      document.getElementById('dash-grid-size').textContent = gridSizeText;
-      document.getElementById('dash-monthly-spent').textContent = `$${monthlySpent.toFixed(2)}`;
-      document.getElementById('healthy-count').textContent = healthCounts.healthy;
-      document.getElementById('warning-count').textContent = healthCounts.fair;
-      document.getElementById('critical-count').textContent = healthCounts.critical;
+      function setTextIfExists(id, value) { const el = document.getElementById(id); if (el) el.textContent = value; }
+      setTextIfExists('total-plants', totalPlants);
+      setTextIfExists('total-quadrants', totalQuadrants);
+      setTextIfExists('total-entries', totalEntries);
+      setTextIfExists('dash-total-plants', totalPlants);
+      setTextIfExists('dash-grid-size', gridSizeText);
+      setTextIfExists('dash-monthly-spent', `$${monthlySpent.toFixed(2)}`);
+      setTextIfExists('healthy-count', healthCounts.healthy);
+      setTextIfExists('warning-count', healthCounts.fair);
+      setTextIfExists('critical-count', healthCounts.critical);
     }
 
     // Camera Functions
@@ -5872,18 +5936,17 @@
 
     // Event Listeners
     function setupEventListeners() {
+      const onIf = (id, event, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(event, fn); };
       // Garden selector
-      document.getElementById('garden-selector').addEventListener('change', (e) => {
-        switchGarden(e.target.value);
-      });
+      onIf('garden-selector','change', (e) => { switchGarden(e.target.value); });
 
-      document.getElementById('create-garden-btn').addEventListener('click', createNewGarden);
+      onIf('create-garden-btn', 'click', createNewGarden);
 
       // Add grid controls
-      document.getElementById('add-grid-btn').addEventListener('click', openAddGridModal);
-      document.getElementById('close-add-grid-modal').addEventListener('click', closeAddGridModal);
-      document.getElementById('cancel-add-grid-modal').addEventListener('click', closeAddGridModal);
-      document.getElementById('save-grid').addEventListener('click', saveGrid);
+      onIf('add-grid-btn', 'click', openAddGridModal);
+      onIf('close-add-grid-modal', 'click', closeAddGridModal);
+      onIf('cancel-add-grid-modal', 'click', closeAddGridModal);
+      onIf('save-grid', 'click', saveGrid);
 
       // Color selection
       document.querySelectorAll('.color-option').forEach(option => {
@@ -5894,42 +5957,67 @@
       });
 
       // Grid modal
-      document.getElementById('close-grid-modal').addEventListener('click', closeGridModal);
-      document.getElementById('cancel-grid-modal').addEventListener('click', closeGridModal);
-      document.getElementById('save-grid-cell').addEventListener('click', saveGridCell);
+      onIf('close-grid-modal', 'click', closeGridModal);
+      onIf('cancel-grid-modal', 'click', closeGridModal);
+      onIf('save-grid-cell', 'click', saveGridCell);
 
       // Plant modal
-      document.getElementById('add-plant-btn').addEventListener('click', () => openPlantModal());
-      document.getElementById('close-plant-modal').addEventListener('click', closePlantModal);
-      document.getElementById('cancel-plant-modal').addEventListener('click', closePlantModal);
-      document.getElementById('save-plant').addEventListener('click', savePlant);
+      onIf('add-plant-btn','click', () => openPlantModal());
+      onIf('close-plant-modal','click', closePlantModal);
+      onIf('cancel-plant-modal','click', closePlantModal);
+      onIf('save-plant','click', savePlant);
 
       // Image modal
-      document.getElementById('close-image-modal').addEventListener('click', closeImageModal);
+      onIf('close-image-modal','click', closeImageModal);
 
       // Journal form
-      document.getElementById('journal-form').addEventListener('submit', (e) => {
+      const jForm = document.getElementById('journal-form');
+      if (jForm) {
+        jForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const text = document.getElementById('journal-textarea').value.trim();
         if (text) {
-          saveJournalEntry(text);
+          // Post to backend - send parsed data for non-AI save
+          try {
+            const parsed = parseJournalEntry(text, appState.currentGardenId);
+            const payload = {
+              date: new Date().toISOString().split('T')[0],
+              content: text,
+              processWithAI: false,
+              processedData: parsed
+            };
+            const res = await fetch('http://localhost:5000/api/journal', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+              await loadBackendData();
+              renderJournal();
+            } else {
+              // fallback to local save
+              saveJournalEntry(text);
+            }
+          } catch (err) {
+            console.error('Journal save failed, using local fallback', err);
+            saveJournalEntry(text);
+          }
         }
-      });
+        });
+      }
 
       // Filters
-      document.getElementById('filter-type').addEventListener('change', renderPlants);
-      document.getElementById('filter-quadrant').addEventListener('change', renderPlants);
-      document.getElementById('filter-health').addEventListener('change', renderPlants);
+      onIf('filter-type', 'change', renderPlants);
+      onIf('filter-quadrant', 'change', renderPlants);
+      onIf('filter-health', 'change', renderPlants);
 
       // Chart type selector
-      document.getElementById('chart-type-selector').addEventListener('change', (e) => {
-        renderChart(e.target.value);
-      });
+      onIf('chart-type-selector','change', (e) => renderChart(e.target.value));
 
       // Camera controls
-      document.getElementById('start-camera-btn').addEventListener('click', startCamera);
-      document.getElementById('stop-camera-btn').addEventListener('click', stopCamera);
-      document.getElementById('capture-photo-btn').addEventListener('click', capturePhoto);
+      onIf('start-camera-btn','click', startCamera);
+      onIf('stop-camera-btn','click', stopCamera);
+      onIf('capture-photo-btn','click', capturePhoto);
 
       // Close modals on overlay click
       document.querySelectorAll('.modal-overlay').forEach(overlay => {
@@ -6131,7 +6219,7 @@
             <div class="application-date">${formatDate(app.date)}</div>
             <div class="application-details">
               <strong>${recipe ? recipe.name : 'Unknown Recipe'}</strong> applied to <strong>${plant ? plant.name : 'Unknown Plant'}</strong><br>
-              Amount: ${app.amount.value} ${app.amount.unit} | Cost: $${app.appliedCost.toFixed(2)}<br>
+              Amount: ${app.amount.value} ${app.amount.unit} | Cost: $${(app.appliedCost || 0).toFixed(2)}<br>
               ${app.notes ? `Notes: ${app.notes}` : ''}
             </div>
           </div>
@@ -6730,5 +6818,6 @@
 
     initApp();
   </script>
+  <script src="api.js"></script>
 </body>
 </html>

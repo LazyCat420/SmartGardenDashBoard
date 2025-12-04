@@ -38,9 +38,9 @@ echo.
 echo Press Ctrl+C to stop the server.
 echo.
 
-:: Run the Flask application
+:: Run the Flask application (using Markdown-based storage)
 cd backend
-python main.py
+python main_md.py
 cd ..
 
 pause

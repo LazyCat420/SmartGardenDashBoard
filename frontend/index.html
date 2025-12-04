@@ -29,6 +29,14 @@
                     <span class="nav-icon">✅</span>
                     <span>Tasks</span>
                 </a>
+                <a href="#" class="nav-item" data-page="recipes">
+                    <span class="nav-icon">🧪</span>
+                    <span>Recipes</span>
+                </a>
+                <a href="#" class="nav-item" data-page="budget">
+                    <span class="nav-icon">💰</span>
+                    <span>Budget</span>
+                </a>
                 <a href="#" class="nav-item" data-page="harvests">
                     <span class="nav-icon">🥕</span>
                     <span>Harvests</span>
@@ -122,6 +130,28 @@
                         <canvas id="healthChart"></canvas>
                     </div>
                 </div>
+
+                <!-- Growth & Watering Charts -->
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h2>📈 Growth Tracker</h2>
+                        <div class="chart-filter">
+                            <select id="growthPlantFilter" title="Select plant for growth chart">
+                                <option value="">Select a plant...</option>
+                            </select>
+                        </div>
+                        <canvas id="growthChart"></canvas>
+                    </div>
+                    <div class="card">
+                        <h2>💧 Watering History</h2>
+                        <div class="chart-filter">
+                            <select id="wateringPlantFilter" title="Filter watering by plant">
+                                <option value="">All Plants</option>
+                            </select>
+                        </div>
+                        <canvas id="wateringChart"></canvas>
+                    </div>
+                </div>
             </div>
 
             <!-- Plants Page -->
@@ -131,7 +161,7 @@
                     <button class="btn btn-primary" id="addPlantBtn">+ Add Plant</button>
                 </div>
                 <div class="filter-bar">
-                    <select id="plantStatusFilter">
+                    <select id="plantStatusFilter" title="Filter plants by status">
                         <option value="active">Active</option>
                         <option value="all">All Plants</option>
                         <option value="harvested">Harvested</option>
@@ -148,13 +178,56 @@
                     <button class="btn btn-primary" id="addTaskBtn">+ Add Task</button>
                 </div>
                 <div class="filter-bar">
-                    <select id="taskFilter">
+                    <select id="taskFilter" title="Filter tasks by status">
                         <option value="pending">Pending</option>
                         <option value="all">All Tasks</option>
                         <option value="completed">Completed</option>
                     </select>
                 </div>
                 <div id="tasksList" class="tasks-list"></div>
+            </div>
+
+            <!-- Recipes Page -->
+            <div class="page" id="recipesPage">
+                <div class="page-header">
+                    <h2>Compost Tea Recipes</h2>
+                    <button class="btn btn-primary" id="addRecipeBtn">+ Add Recipe</button>
+                </div>
+                <div id="recipesList" class="recipes-grid"></div>
+            </div>
+
+            <!-- Budget Page -->
+            <div class="page" id="budgetPage">
+                <div class="page-header">
+                    <h2>Budget & Nutrients</h2>
+                    <button class="btn btn-primary" id="addProductBtn">+ Add Product</button>
+                </div>
+                <div class="budget-summary" id="budgetSummary">
+                    <div class="summary-card">
+                        <h4>Total Spent</h4>
+                        <span class="summary-value" id="totalSpent">$0.00</span>
+                    </div>
+                    <div class="summary-card">
+                        <h4>Products</h4>
+                        <span class="summary-value" id="totalProducts">0</span>
+                    </div>
+                    <div class="summary-card">
+                        <h4>Active Recipes</h4>
+                        <span class="summary-value" id="activeRecipes">0</span>
+                    </div>
+                </div>
+                <div class="budget-charts">
+                    <div class="chart-container">
+                        <h4>Spending by Category</h4>
+                        <canvas id="budgetCategoryChart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <h4>Monthly Spending</h4>
+                        <canvas id="budgetMonthlyChart"></canvas>
+                    </div>
+                </div>
+                <h3 class="section-title">Products & Nutrients</h3>
+                <div id="productsList" class="products-grid"></div>
             </div>
 
             <!-- Harvests Page -->

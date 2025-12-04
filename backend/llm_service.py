@@ -68,7 +68,7 @@ GARDEN_TOOLS = [
                     },
                     "method": {
                         "type": "string",
-                        "description": "Watering method (drip, spray, soak, hose, watering can)"
+                        "description": "Watering method (compost tea, spray, soak, hose, watering can)"
                     },
                     "date": {
                         "type": "string",
@@ -97,7 +97,7 @@ GARDEN_TOOLS = [
                     },
                     "fertilizer_type": {
                         "type": "string",
-                        "description": "Type of fertilizer used (e.g., compost, fish emulsion, 10-10-10)"
+                        "description": "Type of fertilizer used (e.g., compost tea, fish emulsion, 10-10-10)"
                     },
                     "amount": {
                         "type": "string",
@@ -377,8 +377,8 @@ SYSTEM_PROMPT = """You are a smart garden assistant that helps extract structure
 
 Your job is to:
 1. Carefully read the user's note about their garden
-2. Identify ALL relevant garden activities, observations, and data mentioned
-3. Call the appropriate function(s) to log each piece of information
+2. Identify ALL relevant plants, garden activities, observations, and data mentioned
+3. Call the appropriate function(s) to log each piece of information to the corrosponding plant. Check if the plant exists in the garden first before making new plant entry. 
 4. Extract as much detail as possible from the text
 
 Important guidelines:

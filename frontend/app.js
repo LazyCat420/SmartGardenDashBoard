@@ -12,7 +12,13 @@ let tasks = [];
 let harvests = [];
 let notes = [];
 let weather = [];
+let recipes = [];
+let products = [];
 let healthChart = null;
+let growthChart = null;
+let wateringChart = null;
+let budgetCategoryChart = null;
+let budgetMonthlyChart = null;
 
 // ============== DOM Elements ==============
 const elements = {
@@ -46,6 +52,17 @@ const elements = {
     harvestsList: document.getElementById('harvestsList'),
     notesList: document.getElementById('notesList'),
     weatherList: document.getElementById('weatherList'),
+    recipesList: document.getElementById('recipesList'),
+    productsList: document.getElementById('productsList'),
+    
+    // Budget Summary
+    totalSpent: document.getElementById('totalSpent'),
+    totalProducts: document.getElementById('totalProducts'),
+    activeRecipes: document.getElementById('activeRecipes'),
+    
+    // Chart Filters
+    growthPlantFilter: document.getElementById('growthPlantFilter'),
+    wateringPlantFilter: document.getElementById('wateringPlantFilter'),
     
     // Filters
     plantStatusFilter: document.getElementById('plantStatusFilter'),
@@ -55,6 +72,8 @@ const elements = {
     addPlantBtn: document.getElementById('addPlantBtn'),
     addTaskBtn: document.getElementById('addTaskBtn'),
     addWeatherBtn: document.getElementById('addWeatherBtn'),
+    addRecipeBtn: document.getElementById('addRecipeBtn'),
+    addProductBtn: document.getElementById('addProductBtn'),
     
     // Modal
     modalOverlay: document.getElementById('modalOverlay'),
@@ -204,6 +223,8 @@ function navigateTo(page) {
         dashboard: 'Dashboard',
         plants: 'My Plants',
         tasks: 'Tasks & Reminders',
+        recipes: 'Compost Tea Recipes',
+        budget: 'Budget & Nutrients',
         harvests: 'Harvest Log',
         notes: 'Garden Notes',
         weather: 'Weather Log'
@@ -224,6 +245,12 @@ async function loadPageData(page) {
             break;
         case 'tasks':
             await loadTasks();
+            break;
+        case 'recipes':
+            await loadRecipes();
+            break;
+        case 'budget':
+            await loadBudget();
             break;
         case 'harvests':
             await loadHarvests();
@@ -401,13 +428,42 @@ async function loadDashboardData() {
         tasks = await tasksResponse.json();
         renderUpcomingTasks(tasks.slice(0, 5));
         
-        // Load plants for health chart
+        // Load plants for health chart and filter dropdowns
         const plantsResponse = await fetch(`${API_BASE}/plants`);
         plants = await plantsResponse.json();
         renderHealthChart();
         
+        // Populate chart filter dropdowns
+        populateChartFilters();
+        
+        // Load growth and watering charts
+        await loadGrowthChart();
+        await loadWateringChart();
+        
     } catch (error) {
         console.error('Failed to load dashboard data:', error);
+    }
+}
+
+function populateChartFilters() {
+    const activePlants = plants.filter(p => p.status === 'active');
+    
+    // Growth chart filter
+    const growthFilter = elements.growthPlantFilter;
+    if (growthFilter) {
+        growthFilter.innerHTML = '<option value="">Select a plant...</option>' +
+            activePlants.map(p => `<option value="${p.id}">${p.display_name || p.name}</option>`).join('');
+        // Select first plant if available
+        if (activePlants.length > 0) {
+            growthFilter.value = activePlants[0].id;
+        }
+    }
+    
+    // Watering chart filter
+    const wateringFilter = elements.wateringPlantFilter;
+    if (wateringFilter) {
+        wateringFilter.innerHTML = '<option value="">All Plants</option>' +
+            activePlants.map(p => `<option value="${p.id}">${p.display_name || p.name}</option>`).join('');
     }
 }
 
@@ -820,6 +876,12 @@ function setupButtons() {
     elements.addPlantBtn?.addEventListener('click', showAddPlantModal);
     elements.addTaskBtn?.addEventListener('click', showAddTaskModal);
     elements.addWeatherBtn?.addEventListener('click', showAddWeatherModal);
+    elements.addRecipeBtn?.addEventListener('click', showAddRecipeModal);
+    elements.addProductBtn?.addEventListener('click', showAddProductModal);
+    
+    // Chart filter listeners
+    elements.growthPlantFilter?.addEventListener('change', loadGrowthChart);
+    elements.wateringPlantFilter?.addEventListener('change', loadWateringChart);
 }
 
 // ============== Modal ==============
@@ -1332,7 +1394,7 @@ function logWatering(plantId) {
                     <select name="method">
                         <option value="watering can">Watering Can</option>
                         <option value="hose">Hose</option>
-                        <option value="drip">Drip Irrigation</option>
+                        <option value="compost tea">Compost Tea</option>
                         <option value="spray">Spray</option>
                         <option value="soak">Deep Soak</option>
                     </select>
@@ -1388,6 +1450,777 @@ async function deletePlant(plantId) {
     }
 }
 
+// ============== Charts ==============
+async function loadGrowthChart() {
+    const ctx = document.getElementById('growthChart')?.getContext('2d');
+    if (!ctx) return;
+    
+    const plantId = elements.growthPlantFilter?.value;
+    if (!plantId) {
+        if (growthChart) growthChart.destroy();
+        ctx.canvas.parentElement.querySelector('canvas').style.display = 'block';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/charts/growth/${plantId}`);
+        const data = await response.json();
+        
+        if (growthChart) growthChart.destroy();
+        
+        if (!data.dates?.length) {
+            ctx.canvas.style.display = 'none';
+            const placeholder = document.createElement('div');
+            placeholder.className = 'empty-state';
+            placeholder.innerHTML = '<p>No growth data for this plant</p>';
+            ctx.canvas.parentElement.appendChild(placeholder);
+            return;
+        }
+        
+        ctx.canvas.style.display = 'block';
+        
+        growthChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.dates,
+                datasets: [{
+                    label: 'Height (cm)',
+                    data: data.heights,
+                    borderColor: '#22c55e',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Failed to load growth chart:', error);
+    }
+}
+
+async function loadWateringChart() {
+    const ctx = document.getElementById('wateringChart')?.getContext('2d');
+    if (!ctx) return;
+    
+    const plantId = elements.wateringPlantFilter?.value || '';
+    
+    try {
+        const url = plantId ? `${API_BASE}/charts/watering/${plantId}` : `${API_BASE}/charts/watering`;
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (wateringChart) wateringChart.destroy();
+        
+        if (!data.dates?.length) {
+            ctx.canvas.style.display = 'none';
+            return;
+        }
+        
+        ctx.canvas.style.display = 'block';
+        
+        wateringChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.dates,
+                datasets: [{
+                    label: 'Water (ml)',
+                    data: data.amounts,
+                    backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                    borderColor: '#3b82f6',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Failed to load watering chart:', error);
+    }
+}
+
+// ============== Recipes ==============
+async function loadRecipes() {
+    try {
+        const response = await fetch(`${API_BASE}/recipes`);
+        recipes = await response.json();
+        renderRecipes();
+    } catch (error) {
+        console.error('Failed to load recipes:', error);
+        elements.recipesList.innerHTML = '<p class="error">Failed to load recipes</p>';
+    }
+}
+
+function renderRecipes() {
+    if (!elements.recipesList) return;
+    
+    if (!recipes.length) {
+        elements.recipesList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🧪</div>
+                <h3>No Recipes Yet</h3>
+                <p>Create your first compost tea recipe!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.recipesList.innerHTML = recipes.map(recipe => `
+        <div class="recipe-card">
+            <div class="recipe-header">
+                <span class="recipe-name">${recipe.name}</span>
+                <span class="recipe-type ${recipe.type.replace(' ', '-')}">${recipe.type}</span>
+            </div>
+            ${recipe.description ? `<p class="recipe-description">${recipe.description}</p>` : ''}
+            <div class="recipe-ingredients">
+                <h4>Ingredients</h4>
+                <div class="ingredient-list">
+                    ${recipe.ingredients.map(ing => `
+                        <div class="ingredient-item">
+                            <span class="ingredient-name">${ing.product_name || ing.name}</span>
+                            <span class="ingredient-amount">${ing.amount} ${ing.unit}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+            <div class="recipe-cost">
+                <span class="cost-label">Estimated Cost</span>
+                <span class="cost-value">$${(recipe.total_cost || 0).toFixed(2)}</span>
+            </div>
+            <div class="recipe-actions">
+                <button class="btn btn-secondary btn-sm" onclick="editRecipe('${recipe.id}')">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteRecipe('${recipe.id}')">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function showAddRecipeModal() {
+    showModal('Add New Recipe', `
+        <form id="addRecipeForm">
+            <div class="form-group">
+                <label>Recipe Name *</label>
+                <input type="text" name="name" required placeholder="e.g., Compost Tea Mix #1">
+            </div>
+            <div class="form-group">
+                <label>Type</label>
+                <select name="type">
+                    <option value="compost-tea">Compost Tea</option>
+                    <option value="fertilizer">Fertilizer</option>
+                    <option value="pesticide">Pesticide</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea name="description" rows="2" placeholder="Notes about this recipe..."></textarea>
+            </div>
+            <div class="ingredients-builder">
+                <h4>Ingredients</h4>
+                <div id="ingredientsList"></div>
+                <button type="button" class="btn-add-ingredient" onclick="addIngredientRow()">+ Add Ingredient</button>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Recipe</button>
+            </div>
+        </form>
+    `);
+    
+    // Add one initial ingredient row
+    addIngredientRow();
+    
+    document.getElementById('addRecipeForm').addEventListener('submit', handleAddRecipe);
+}
+
+function addIngredientRow() {
+    const container = document.getElementById('ingredientsList');
+    const row = document.createElement('div');
+    row.className = 'ingredient-row';
+    row.innerHTML = `
+        <input type="text" name="ingredient_name[]" placeholder="Product/Ingredient" required>
+        <input type="number" name="ingredient_amount[]" step="0.1" min="0" placeholder="Amount" required>
+        <select name="ingredient_unit[]">
+            <option value="tbsp">tbsp</option>
+            <option value="tsp">tsp</option>
+            <option value="cups">cups</option>
+            <option value="ml">ml</option>
+            <option value="g">g</option>
+            <option value="oz">oz</option>
+            <option value="lb">lb</option>
+        </select>
+        <button type="button" class="btn-remove-ingredient" onclick="this.parentElement.remove()">×</button>
+    `;
+    container.appendChild(row);
+}
+
+async function handleAddRecipe(e) {
+    e.preventDefault();
+    const form = e.target;
+    
+    const ingredients = [];
+    const names = form.querySelectorAll('[name="ingredient_name[]"]');
+    const amounts = form.querySelectorAll('[name="ingredient_amount[]"]');
+    const units = form.querySelectorAll('[name="ingredient_unit[]"]');
+    
+    for (let i = 0; i < names.length; i++) {
+        if (names[i].value && amounts[i].value) {
+            ingredients.push({
+                name: names[i].value,
+                amount: parseFloat(amounts[i].value),
+                unit: units[i].value
+            });
+        }
+    }
+    
+    const data = {
+        name: form.name.value,
+        type: form.type.value,
+        description: form.description.value,
+        ingredients: ingredients
+    };
+    
+    try {
+        const response = await fetch(`${API_BASE}/recipes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            showToast('Recipe saved!', 'success');
+            closeModal();
+            await loadRecipes();
+        } else {
+            const err = await response.json();
+            showToast(err.error || 'Failed to save recipe', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save recipe', 'error');
+    }
+}
+
+async function editRecipe(recipeId) {
+    const recipe = recipes.find(r => r.id === recipeId);
+    if (!recipe) return;
+    
+    showModal('Edit Recipe', `
+        <form id="editRecipeForm" data-recipe-id="${recipeId}">
+            <div class="form-group">
+                <label>Recipe Name *</label>
+                <input type="text" name="name" required value="${recipe.name}">
+            </div>
+            <div class="form-group">
+                <label>Type</label>
+                <select name="type">
+                    <option value="compost-tea" ${recipe.type === 'compost-tea' ? 'selected' : ''}>Compost Tea</option>
+                    <option value="fertilizer" ${recipe.type === 'fertilizer' ? 'selected' : ''}>Fertilizer</option>
+                    <option value="pesticide" ${recipe.type === 'pesticide' ? 'selected' : ''}>Pesticide</option>
+                    <option value="other" ${recipe.type === 'other' ? 'selected' : ''}>Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea name="description" rows="2">${recipe.description || ''}</textarea>
+            </div>
+            <div class="ingredients-builder">
+                <h4>Ingredients</h4>
+                <div id="ingredientsList"></div>
+                <button type="button" class="btn-add-ingredient" onclick="addIngredientRow()">+ Add Ingredient</button>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Recipe</button>
+            </div>
+        </form>
+    `);
+    
+    // Populate existing ingredients
+    recipe.ingredients.forEach(ing => {
+        const container = document.getElementById('ingredientsList');
+        const row = document.createElement('div');
+        row.className = 'ingredient-row';
+        row.innerHTML = `
+            <input type="text" name="ingredient_name[]" placeholder="Product/Ingredient" value="${ing.product_name || ing.name}" required>
+            <input type="number" name="ingredient_amount[]" step="0.1" min="0" value="${ing.amount}" required>
+            <select name="ingredient_unit[]">
+                <option value="tbsp" ${ing.unit === 'tbsp' ? 'selected' : ''}>tbsp</option>
+                <option value="tsp" ${ing.unit === 'tsp' ? 'selected' : ''}>tsp</option>
+                <option value="cups" ${ing.unit === 'cups' ? 'selected' : ''}>cups</option>
+                <option value="ml" ${ing.unit === 'ml' ? 'selected' : ''}>ml</option>
+                <option value="g" ${ing.unit === 'g' ? 'selected' : ''}>g</option>
+                <option value="oz" ${ing.unit === 'oz' ? 'selected' : ''}>oz</option>
+                <option value="lb" ${ing.unit === 'lb' ? 'selected' : ''}>lb</option>
+            </select>
+            <button type="button" class="btn-remove-ingredient" onclick="this.parentElement.remove()">×</button>
+        `;
+        container.appendChild(row);
+    });
+    
+    if (recipe.ingredients.length === 0) {
+        addIngredientRow();
+    }
+    
+    document.getElementById('editRecipeForm').addEventListener('submit', handleEditRecipe);
+}
+
+async function handleEditRecipe(e) {
+    e.preventDefault();
+    const form = e.target;
+    const recipeId = form.dataset.recipeId;
+    
+    const ingredients = [];
+    const names = form.querySelectorAll('[name="ingredient_name[]"]');
+    const amounts = form.querySelectorAll('[name="ingredient_amount[]"]');
+    const units = form.querySelectorAll('[name="ingredient_unit[]"]');
+    
+    for (let i = 0; i < names.length; i++) {
+        if (names[i].value && amounts[i].value) {
+            ingredients.push({
+                name: names[i].value,
+                amount: parseFloat(amounts[i].value),
+                unit: units[i].value
+            });
+        }
+    }
+    
+    const data = {
+        name: form.name.value,
+        type: form.type.value,
+        description: form.description.value,
+        ingredients: ingredients
+    };
+    
+    try {
+        const response = await fetch(`${API_BASE}/recipes/${recipeId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            showToast('Recipe updated!', 'success');
+            closeModal();
+            await loadRecipes();
+        } else {
+            showToast('Failed to update recipe', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to update recipe', 'error');
+    }
+}
+
+async function deleteRecipe(recipeId) {
+    if (!confirm('Are you sure you want to delete this recipe?')) return;
+    
+    try {
+        await fetch(`${API_BASE}/recipes/${recipeId}`, { method: 'DELETE' });
+        showToast('Recipe deleted', 'success');
+        await loadRecipes();
+    } catch (error) {
+        showToast('Failed to delete recipe', 'error');
+    }
+}
+
+// ============== Budget ==============
+async function loadBudget() {
+    try {
+        const [productsResponse, summaryResponse] = await Promise.all([
+            fetch(`${API_BASE}/budget/products`),
+            fetch(`${API_BASE}/budget/summary`)
+        ]);
+        
+        products = await productsResponse.json();
+        const summary = await summaryResponse.json();
+        
+        // Update summary cards
+        if (elements.totalSpent) {
+            elements.totalSpent.textContent = `$${(summary.total_spent || 0).toFixed(2)}`;
+        }
+        if (elements.totalProducts) {
+            elements.totalProducts.textContent = summary.total_products || 0;
+        }
+        if (elements.activeRecipes) {
+            elements.activeRecipes.textContent = summary.active_recipes || 0;
+        }
+        
+        renderProducts();
+        await loadBudgetCharts();
+    } catch (error) {
+        console.error('Failed to load budget:', error);
+    }
+}
+
+function renderProducts() {
+    if (!elements.productsList) return;
+    
+    if (!products.length) {
+        elements.productsList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">💰</div>
+                <h3>No Products Yet</h3>
+                <p>Add products to track your garden budget!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.productsList.innerHTML = products.map(product => `
+        <div class="product-card">
+            <div class="product-header">
+                <span class="product-name">${product.name}</span>
+                <span class="product-category">${product.category || 'General'}</span>
+            </div>
+            <div class="product-details">
+                <div class="product-detail">
+                    <span class="product-detail-label">Price</span>
+                    <span class="product-detail-value">$${(product.price || 0).toFixed(2)}</span>
+                </div>
+                <div class="product-detail">
+                    <span class="product-detail-label">Size</span>
+                    <span class="product-detail-value">${product.size_amount || '-'} ${product.size_unit || ''}</span>
+                </div>
+                <div class="product-detail">
+                    <span class="product-detail-label">Price/Unit</span>
+                    <span class="product-detail-value price-per-unit">$${(product.price_per_unit || 0).toFixed(4)}</span>
+                </div>
+                <div class="product-detail">
+                    <span class="product-detail-label">Purchased</span>
+                    <span class="product-detail-value">${product.purchase_date ? formatDate(new Date(product.purchase_date)) : '-'}</span>
+                </div>
+            </div>
+            <div class="product-actions">
+                <button class="btn btn-secondary btn-sm" onclick="editProduct('${product.id}')">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteProduct('${product.id}')">Delete</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function showAddProductModal() {
+    showModal('Add New Product', `
+        <form id="addProductForm">
+            <div class="form-group">
+                <label>Product Name *</label>
+                <input type="text" name="name" required placeholder="e.g., Fish Emulsion">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Category</label>
+                    <select name="category">
+                        <option value="fertilizer">Fertilizer</option>
+                        <option value="nutrient">Nutrient</option>
+                        <option value="soil">Soil</option>
+                        <option value="pesticide">Pesticide</option>
+                        <option value="equipment">Equipment</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Price ($) *</label>
+                    <input type="number" name="price" step="0.01" min="0" required placeholder="0.00">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Size Amount</label>
+                    <input type="number" name="size_amount" step="0.1" min="0" placeholder="e.g., 16">
+                </div>
+                <div class="form-group">
+                    <label>Size Unit</label>
+                    <select name="size_unit">
+                        <option value="oz">oz</option>
+                        <option value="lb">lb</option>
+                        <option value="g">g</option>
+                        <option value="kg">kg</option>
+                        <option value="ml">ml</option>
+                        <option value="L">L</option>
+                        <option value="gal">gal</option>
+                        <option value="qt">qt</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Purchase Date</label>
+                <input type="date" name="purchase_date">
+            </div>
+            <div class="form-group">
+                <label>Where Purchased</label>
+                <input type="text" name="store" placeholder="e.g., Home Depot">
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Any notes about this product..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Product</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('addProductForm').addEventListener('submit', handleAddProduct);
+}
+
+async function handleAddProduct(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // Convert numbers
+    if (data.price) data.price = parseFloat(data.price);
+    if (data.size_amount) data.size_amount = parseFloat(data.size_amount);
+    
+    try {
+        const response = await fetch(`${API_BASE}/budget/products`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            showToast('Product saved!', 'success');
+            closeModal();
+            await loadBudget();
+        } else {
+            const err = await response.json();
+            showToast(err.error || 'Failed to save product', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save product', 'error');
+    }
+}
+
+async function editProduct(productId) {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    
+    showModal('Edit Product', `
+        <form id="editProductForm" data-product-id="${productId}">
+            <div class="form-group">
+                <label>Product Name *</label>
+                <input type="text" name="name" required value="${product.name}">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Category</label>
+                    <select name="category">
+                        <option value="fertilizer" ${product.category === 'fertilizer' ? 'selected' : ''}>Fertilizer</option>
+                        <option value="nutrient" ${product.category === 'nutrient' ? 'selected' : ''}>Nutrient</option>
+                        <option value="soil" ${product.category === 'soil' ? 'selected' : ''}>Soil</option>
+                        <option value="pesticide" ${product.category === 'pesticide' ? 'selected' : ''}>Pesticide</option>
+                        <option value="equipment" ${product.category === 'equipment' ? 'selected' : ''}>Equipment</option>
+                        <option value="other" ${product.category === 'other' ? 'selected' : ''}>Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Price ($) *</label>
+                    <input type="number" name="price" step="0.01" min="0" required value="${product.price || ''}">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Size Amount</label>
+                    <input type="number" name="size_amount" step="0.1" min="0" value="${product.size_amount || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Size Unit</label>
+                    <select name="size_unit">
+                        <option value="oz" ${product.size_unit === 'oz' ? 'selected' : ''}>oz</option>
+                        <option value="lb" ${product.size_unit === 'lb' ? 'selected' : ''}>lb</option>
+                        <option value="g" ${product.size_unit === 'g' ? 'selected' : ''}>g</option>
+                        <option value="kg" ${product.size_unit === 'kg' ? 'selected' : ''}>kg</option>
+                        <option value="ml" ${product.size_unit === 'ml' ? 'selected' : ''}>ml</option>
+                        <option value="L" ${product.size_unit === 'L' ? 'selected' : ''}>L</option>
+                        <option value="gal" ${product.size_unit === 'gal' ? 'selected' : ''}>gal</option>
+                        <option value="qt" ${product.size_unit === 'qt' ? 'selected' : ''}>qt</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Purchase Date</label>
+                <input type="date" name="purchase_date" value="${product.purchase_date || ''}">
+            </div>
+            <div class="form-group">
+                <label>Where Purchased</label>
+                <input type="text" name="store" value="${product.store || ''}">
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2">${product.notes || ''}</textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Product</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('editProductForm').addEventListener('submit', handleEditProduct);
+}
+
+async function handleEditProduct(e) {
+    e.preventDefault();
+    const form = e.target;
+    const productId = form.dataset.productId;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    if (data.price) data.price = parseFloat(data.price);
+    if (data.size_amount) data.size_amount = parseFloat(data.size_amount);
+    
+    try {
+        const response = await fetch(`${API_BASE}/budget/products/${productId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        if (response.ok) {
+            showToast('Product updated!', 'success');
+            closeModal();
+            await loadBudget();
+        } else {
+            showToast('Failed to update product', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to update product', 'error');
+    }
+}
+
+async function deleteProduct(productId) {
+    if (!confirm('Are you sure you want to delete this product?')) return;
+    
+    try {
+        await fetch(`${API_BASE}/budget/products/${productId}`, { method: 'DELETE' });
+        showToast('Product deleted', 'success');
+        await loadBudget();
+    } catch (error) {
+        showToast('Failed to delete product', 'error');
+    }
+}
+
+async function loadBudgetCharts() {
+    try {
+        const response = await fetch(`${API_BASE}/charts/budget`);
+        const data = await response.json();
+        
+        // Category Chart
+        const catCtx = document.getElementById('budgetCategoryChart')?.getContext('2d');
+        if (catCtx && data.by_category) {
+            if (budgetCategoryChart) budgetCategoryChart.destroy();
+            
+            const categories = Object.keys(data.by_category);
+            const values = Object.values(data.by_category);
+            
+            if (categories.length > 0) {
+                budgetCategoryChart = new Chart(catCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: categories,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: [
+                                '#22c55e', '#3b82f6', '#f59e0b', 
+                                '#ef4444', '#8b5cf6', '#ec4899'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: { color: '#94a3b8' }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        
+        // Monthly Chart
+        const monthCtx = document.getElementById('budgetMonthlyChart')?.getContext('2d');
+        if (monthCtx && data.by_month) {
+            if (budgetMonthlyChart) budgetMonthlyChart.destroy();
+            
+            const months = Object.keys(data.by_month);
+            const values = Object.values(data.by_month);
+            
+            if (months.length > 0) {
+                budgetMonthlyChart = new Chart(monthCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: months,
+                        datasets: [{
+                            label: 'Spending ($)',
+                            data: values,
+                            backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                            borderColor: '#3b82f6',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#94a3b8' }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: '#94a3b8' }
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load budget charts:', error);
+    }
+}
+
 // ============== Utilities ==============
 function formatDate(date) {
     return date.toLocaleDateString('en-US', {
@@ -1423,3 +2256,8 @@ window.logGrowth = logGrowth;
 window.logWatering = logWatering;
 window.deletePlant = deletePlant;
 window.closeModal = closeModal;
+window.addIngredientRow = addIngredientRow;
+window.editRecipe = editRecipe;
+window.deleteRecipe = deleteRecipe;
+window.editProduct = editProduct;
+window.deleteProduct = deleteProduct;

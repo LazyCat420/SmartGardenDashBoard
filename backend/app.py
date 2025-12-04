@@ -97,7 +97,7 @@ class Watering(db.Model):
     plant_id = db.Column(db.Integer, db.ForeignKey('plant.id'), nullable=False)
     date = db.Column(db.DateTime, default=datetime.utcnow)
     amount_ml = db.Column(db.Float)
-    method = db.Column(db.String(50))  # drip, spray, soak, etc.
+    method = db.Column(db.String(50))  # compost tea, spray, soak, etc.
     notes = db.Column(db.Text)
 
     def to_dict(self):

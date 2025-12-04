@@ -139,16 +139,16 @@ function handleQRCodeRedirect() {
         
         // Wait for plants to load, then show the plant
         setTimeout(() => {
-            const pid = parseInt(plantId);
+            // plantId is already a string (UUID)
             if (action === 'view') {
-                viewPlant(pid);
+                viewPlant(plantId);
             } else if (action === 'water') {
-                logWatering(pid);
+                logWatering(plantId);
             } else if (action === 'growth') {
-                logGrowth(pid);
+                logGrowth(plantId);
             } else {
                 // Default: show quick action modal
-                showPlantQuickActions(pid);
+                showPlantQuickActions(plantId);
             }
             // Clear the URL params
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -170,19 +170,19 @@ function showPlantQuickActions(plantId) {
         <div class="quick-actions-container">
             <p class="quick-actions-intro">What would you like to do with this plant?</p>
             <div class="quick-actions-grid">
-                <button class="quick-action-btn" onclick="closeModal(); viewPlant(${plantId})">
+                <button class="quick-action-btn" onclick="closeModal(); viewPlant('${plantId}')">
                     <span class="quick-action-icon">👁️</span>
                     <span>View Details</span>
                 </button>
-                <button class="quick-action-btn" onclick="closeModal(); logWatering(${plantId})">
+                <button class="quick-action-btn" onclick="closeModal(); logWatering('${plantId}')">
                     <span class="quick-action-icon">💧</span>
                     <span>Log Watering</span>
                 </button>
-                <button class="quick-action-btn" onclick="closeModal(); logGrowth(${plantId})">
+                <button class="quick-action-btn" onclick="closeModal(); logGrowth('${plantId}')">
                     <span class="quick-action-icon">📏</span>
                     <span>Log Growth</span>
                 </button>
-                <button class="quick-action-btn" onclick="closeModal(); showLabel(${plantId})">
+                <button class="quick-action-btn" onclick="closeModal(); showLabel('${plantId}')">
                     <span class="quick-action-icon">🏷️</span>
                     <span>View Label</span>
                 </button>
@@ -483,7 +483,7 @@ function renderUpcomingTasks(taskList) {
         
         return `
             <div class="task-item">
-                <div class="task-checkbox" onclick="completeTask(${task.id})"></div>
+                <div class="task-checkbox" onclick="completeTask('${task.id}')"></div>
                 <div class="task-content">
                     <div class="task-title">${task.title}</div>
                     <div class="task-due ${isOverdue ? 'overdue' : ''}">
@@ -635,10 +635,10 @@ function renderPlants(plantList) {
                     </div>
                     <span class="plant-status ${plant.status}">${plant.status}</span>
                     <div class="plant-actions">
-                        <button class="btn btn-small btn-secondary" onclick="viewPlant(${plant.id})">View</button>
-                        <button class="btn btn-small btn-secondary" onclick="showLabel(${plant.id})">🏷️ Label</button>
-                        <button class="btn btn-small btn-secondary" onclick="logGrowth(${plant.id})">📏 Growth</button>
-                        <button class="btn btn-small btn-secondary" onclick="logWatering(${plant.id})">💧 Water</button>
+                        <button class="btn btn-small btn-secondary" onclick="viewPlant('${plant.id}')">View</button>
+                        <button class="btn btn-small btn-secondary" onclick="showLabel('${plant.id}')">🏷️ Label</button>
+                        <button class="btn btn-small btn-secondary" onclick="logGrowth('${plant.id}')">📏 Growth</button>
+                        <button class="btn btn-small btn-secondary" onclick="logWatering('${plant.id}')">💧 Water</button>
                     </div>
                 </div>
             </div>
@@ -687,7 +687,7 @@ function renderTasks(taskList) {
         return `
             <div class="task-item">
                 <div class="task-checkbox ${task.completed ? 'checked' : ''}" 
-                     onclick="completeTask(${task.id})"
+                     onclick="completeTask('${task.id}')"
                      ${task.completed ? 'style="pointer-events:none"' : ''}></div>
                 <div class="task-content">
                     <div class="task-title" style="${task.completed ? 'text-decoration: line-through; opacity: 0.6' : ''}">
@@ -699,7 +699,7 @@ function renderTasks(taskList) {
                     </div>
                 </div>
                 <span class="task-priority ${task.priority}">${task.priority}</span>
-                <button class="btn btn-small btn-danger" onclick="deleteTask(${task.id})">🗑️</button>
+                <button class="btn btn-small btn-danger" onclick="deleteTask('${task.id}')">🗑️</button>
             </div>
         `;
     }).join('');
@@ -1189,8 +1189,8 @@ function viewPlant(plantId) {
                 <p>${plant.notes || 'No notes'}</p>
             </div>
             <div class="form-actions">
-                <button class="btn btn-primary" onclick="showLabel(${plant.id})">🏷️ Generate Label</button>
-                <button class="btn btn-danger" onclick="deletePlant(${plant.id})">Delete Plant</button>
+                <button class="btn btn-primary" onclick="showLabel('${plant.id}')">🏷️ Generate Label</button>
+                <button class="btn btn-danger" onclick="deletePlant('${plant.id}')">Delete Plant</button>
                 <button class="btn btn-secondary" onclick="closeModal()">Close</button>
             </div>
         </div>

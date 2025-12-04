@@ -34,9 +34,11 @@ from md_service import (
     create_note, list_notes, update_note,
     # Recipes
     create_recipe, get_recipe, list_recipes, update_recipe, delete_recipe,
+    find_recipe_by_name,
     # Budget
     create_product, get_product, list_products, update_product, delete_product,
     get_budget_summary, get_cost_per_plant,
+    find_product_by_name,
     # Charts
     get_growth_chart_data, get_watering_chart_data, get_budget_chart_data
 )
@@ -74,7 +76,7 @@ GARDEN_TOOLS = [
         "type": "function",
         "function": {
             "name": "log_watering",
-            "description": "Log a watering event for a plant. Can include compost tea recipes.",
+            "description": "Log a watering event for a plant. If the user mentions using a compost tea or nutrient recipe (like 'veg compost tea', 'flower tea', etc.), extract the recipe name. The system will automatically match it to saved recipes and calculate ingredient costs.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -82,8 +84,8 @@ GARDEN_TOOLS = [
                     "amount_ml": {"type": "number", "description": "Amount in ml"},
                     "amount_value": {"type": "number", "description": "Amount in other units"},
                     "amount_unit": {"type": "string", "description": "Unit (ml, gallons, cups)"},
-                    "method": {"type": "string", "description": "Watering method (watering can, hose, compost tea, spray, soak)"},
-                    "recipe_name": {"type": "string", "description": "Name of compost tea recipe used"},
+                    "method": {"type": "string", "description": "Watering method - use specific recipe name if a tea/recipe was mentioned (e.g., 'veg compost tea', 'flower compost tea'), otherwise use general method (watering can, hose, spray, soak)"},
+                    "recipe_name": {"type": "string", "description": "Name of compost tea or nutrient recipe used if mentioned (e.g., 'veg compost tea', 'bloom tea', 'kelp tea'). System will fuzzy-match to saved recipes and auto-fill ingredients/costs."},
                     "date": {"type": "string", "description": "Date (YYYY-MM-DD)"},
                     "notes": {"type": "string", "description": "Notes"}
                 },
@@ -298,24 +300,44 @@ def process_note():
         return jsonify({'error': 'No note provided'}), 400
     
     try:
-        system_prompt = """You are a helpful garden assistant that extracts ALL garden data from user notes.
+        # Get list of existing recipes for context
+        recipes = list_recipes()
+        recipe_names = [r.get('name', '') for r in recipes] if recipes else []
+        recipe_list = ", ".join(recipe_names) if recipe_names else "No recipes saved yet"
+        
+        system_prompt = f"""You are a helpful garden assistant that extracts ALL garden data from user notes.
 
-CRITICAL INSTRUCTIONS:
-1. Extract EVERY plant mentioned, even if multiple plants are in a single sentence
-2. When a plant has a variety (e.g., "Mint (Spearmint)" or "Lettuce - Buttercrunch"), include the variety in parentheses
-3. If a note mentions multiple varieties of the same plant, create SEPARATE actions for each variety
-4. Always add plants that don't exist yet before logging growth/watering for them
-5. Extract growth observations as log_growth (health_rating 1-10, notes about vigor/condition)
-6. Create tasks for any mentioned future actions or maintenance needs
-7. Use update_plant_status when plants are "pulled", "removed", "harvested completely", or "finished"
+CRITICAL INSTRUCTIONS FOR CATEGORIZING ACTIONS:
+1. Extract EVERY piece of information from the note into the appropriate action type:
+   - WATERING: Any mention of watering, using tea/recipe, irrigating. Use log_watering.
+   - GROWTH: Any mention of height, size, health, appearance, looking sick/good. Use log_growth.
+   - HARVEST: Any mention of picking, harvesting, collecting produce. Use log_harvest.
+   - ISSUES/PESTS: Any mention of pests, disease, problems, wilting, overwatering damage. Use report_pest_issue.
+   - STATUS UPDATES: Plant died, removed, finished. Use update_plant_status.
 
-EXAMPLES:
-- "Spearmint sending aggressive runners" = add_plant(Mint (Spearmint)) + log_growth with notes
-- "Chocolate Mint more contained" = add_plant(Mint (Chocolate Mint)) + log_growth with notes  
-- "Second succession Red Oak Leaf at 2-week stage" = add_plant(Lettuce (Red Oak Leaf)) with notes
-- "Trimmed back 40%" = log_growth with notes + possibly create_task for future trimming
+2. RECIPE MATCHING: When user mentions using a tea or recipe for watering:
+   - Extract the recipe name exactly as mentioned (e.g., "veg compost tea", "flower tea", "bloom tea")
+   - Put the recipe name in BOTH the 'method' and 'recipe_name' fields
+   - Available recipes in the system: {recipe_list}
+   - The system will automatically fuzzy-match to the closest recipe and calculate costs
 
-Be thorough! Extract ALL plants and ALL observations. Today's date is """ + datetime.now().strftime('%Y-%m-%d')
+3. SPLIT MULTIPLE OBSERVATIONS: A single sentence may contain MULTIPLE pieces of info:
+   - "Water with veg compost tea. Plant is 12 inches tall now. Looks sick will stop overwatering."
+   = log_watering (recipe_name: "veg compost tea") 
+   + log_growth (height_cm: 30.48, notes: "12 inches tall")
+   + report_pest_issue (pest_type: "overwatering damage", severity: "moderate", notes: "looks sick, will stop overwatering")
+
+4. HEALTH DESCRIPTIONS map to health_rating (1-10):
+   - "looking great/thriving/healthy" = 8-10
+   - "doing okay/normal" = 5-7  
+   - "not doing well/struggling" = 3-5
+   - "looks sick/wilting/dying" = 1-3
+
+5. Convert measurements: inches to cm (multiply by 2.54), feet to cm (multiply by 30.48)
+
+6. When a plant has a variety (e.g., "Mint (Spearmint)"), include the variety in parentheses
+
+Today's date is """ + datetime.now().strftime('%Y-%m-%d')
         
         response = requests.post(
             LMSTUDIO_URL,
@@ -400,8 +422,24 @@ def apply_actions():
             elif action_name == 'log_watering':
                 plant = find_plant_by_name(params.get('plant_name', ''))
                 if plant:
+                    # Auto-fill recipe data if recipe_name is provided
+                    recipe_name = params.get('recipe_name') or params.get('method', '')
+                    if recipe_name:
+                        # Try to find matching recipe using fuzzy matching
+                        recipe = find_recipe_by_name(recipe_name)
+                        if recipe:
+                            # Auto-fill recipe data
+                            params['recipe_id'] = recipe.get('id')
+                            params['recipe_name'] = recipe.get('name')
+                            params['ingredients'] = recipe.get('ingredients', [])
+                            params['total_cost'] = recipe.get('total_cost', 0)
+                            # Set method to recipe name if not already specific
+                            if not params.get('method') or params.get('method') == recipe_name:
+                                params['method'] = recipe.get('name')
+                    
                     log = create_watering(plant['id'], params)
-                    results.append({'action': action_name, 'success': log is not None})
+                    results.append({'action': action_name, 'success': log is not None, 
+                                   'recipe_matched': params.get('recipe_name') if recipe_name else None})
                 else:
                     results.append({'action': action_name, 'success': False, 'error': 'Plant not found'})
                 
@@ -960,10 +998,22 @@ def get_product_endpoint(product_id):
 
 @app.route('/api/budget/products/<product_id>', methods=['PUT'])
 def update_product_endpoint(product_id):
-    """Update a product"""
+    """Update a product and optionally recalculate recipe costs"""
     data = request.json
     product = update_product(product_id, data)
     if product:
+        # Auto-recalculate recipe costs if price changed
+        if 'price' in data or 'purchase_price' in data or 'size_amount' in data:
+            # Find recipes that use this product and recalculate their costs
+            recipes = list_recipes()
+            for recipe in recipes:
+                ingredients = recipe.get('ingredients', [])
+                for ing in ingredients:
+                    if ing.get('product_id') == product_id or \
+                       (ing.get('product_name', '').lower() == product.get('name', '').lower()):
+                        # This recipe uses this product, recalculate
+                        update_recipe(recipe['id'], {'ingredients': ingredients})
+                        break
         return jsonify(product)
     return jsonify({'error': 'Product not found'}), 404
 
@@ -988,6 +1038,28 @@ def get_cost_per_plant_endpoint(plant_id):
     """Get cost analysis for a specific plant"""
     cost = get_cost_per_plant(plant_id)
     return jsonify(cost)
+
+
+@app.route('/api/budget/recalculate-recipe-costs', methods=['POST'])
+def recalculate_recipe_costs():
+    """
+    Recalculate costs for all recipes based on current product prices.
+    Call this after updating product prices to keep recipes in sync.
+    """
+    recipes = list_recipes()
+    updated_count = 0
+    
+    for recipe in recipes:
+        # Trigger cost recalculation by updating with same ingredients
+        updated = update_recipe(recipe['id'], {'ingredients': recipe.get('ingredients', [])})
+        if updated:
+            updated_count += 1
+    
+    return jsonify({
+        'success': True,
+        'recipes_updated': updated_count,
+        'message': f'Recalculated costs for {updated_count} recipes'
+    })
 
 
 # ============== Chart Data Endpoints ==============

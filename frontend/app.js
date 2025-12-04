@@ -2760,10 +2760,10 @@ async function processScanNote() {
         
         const data = await response.json();
         
-        if (data.actions && data.actions.length > 0) {
+        if (data.extracted_actions && data.extracted_actions.length > 0) {
             // Auto-set plant_id for actions that need it
-            data.actions = data.actions.map(action => {
-                if (['log_watering', 'log_fertilization', 'log_growth', 'log_harvest', 'report_pest', 'update_status'].includes(action.action)) {
+            data.extracted_actions = data.extracted_actions.map(action => {
+                if (['log_watering', 'log_fertilization', 'log_growth', 'log_harvest', 'report_pest_issue', 'update_plant_status'].includes(action.action)) {
                     action.parameters = action.parameters || {};
                     action.parameters.plant_id = scannedPlant.id;
                     action.parameters.plant_name = scannedPlant.name;
@@ -2771,8 +2771,8 @@ async function processScanNote() {
                 return action;
             });
             
-            displayScanExtractedActions(data.actions);
-            showToast(`Found ${data.actions.length} action(s)`, 'success');
+            displayScanExtractedActions(data.extracted_actions);
+            showToast(`Found ${data.extracted_actions.length} action(s)`, 'success');
         } else {
             showToast('No actions detected in note', 'error');
         }
@@ -2794,10 +2794,10 @@ function displayScanExtractedActions(actions) {
         'log_fertilization': '🧪',
         'log_growth': '📏',
         'log_harvest': '🥕',
-        'report_pest': '🐛',
+        'report_pest_issue': '🐛',
         'create_task': '✅',
         'log_weather': '🌤️',
-        'update_status': '📊',
+        'update_plant_status': '📊',
         'add_budget_item': '💰'
     };
     

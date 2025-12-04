@@ -55,6 +55,323 @@ def generate_id() -> str:
     return str(uuid.uuid4())[:8]
 
 
+# ============== Unit Conversion Utilities ==============
+
+# Unit conversions to a base unit (ml for volume, grams for weight)
+VOLUME_TO_ML = {
+    'ml': 1.0,
+    'milliliter': 1.0,
+    'milliliters': 1.0,
+    'l': 1000.0,
+    'liter': 1000.0,
+    'liters': 1000.0,
+    'tsp': 4.92892,
+    'teaspoon': 4.92892,
+    'teaspoons': 4.92892,
+    'tbsp': 14.7868,
+    'tablespoon': 14.7868,
+    'tablespoons': 14.7868,
+    'cup': 236.588,
+    'cups': 236.588,
+    'pint': 473.176,
+    'pints': 473.176,
+    'quart': 946.353,
+    'quarts': 946.353,
+    'gallon': 3785.41,
+    'gallons': 3785.41,
+    'gal': 3785.41,
+    'fl oz': 29.5735,
+    'fluid ounce': 29.5735,
+    'fluid ounces': 29.5735,
+    'oz': 29.5735,  # Assume fluid oz for volume context
+}
+
+WEIGHT_TO_GRAMS = {
+    'g': 1.0,
+    'gram': 1.0,
+    'grams': 1.0,
+    'kg': 1000.0,
+    'kilogram': 1000.0,
+    'kilograms': 1000.0,
+    'oz': 28.3495,
+    'ounce': 28.3495,
+    'ounces': 28.3495,
+    'lb': 453.592,
+    'lbs': 453.592,
+    'pound': 453.592,
+    'pounds': 453.592,
+}
+
+def normalize_unit(unit: str) -> str:
+    """Normalize unit string to lowercase without extra spaces"""
+    if not unit:
+        return ''
+    return unit.lower().strip()
+
+def convert_volume(amount: float, from_unit: str, to_unit: str) -> Optional[float]:
+    """Convert between volume units. Returns None if conversion not possible."""
+    from_unit = normalize_unit(from_unit)
+    to_unit = normalize_unit(to_unit)
+    
+    if from_unit not in VOLUME_TO_ML or to_unit not in VOLUME_TO_ML:
+        return None
+    
+    # Convert to ml first, then to target unit
+    ml = amount * VOLUME_TO_ML[from_unit]
+    return ml / VOLUME_TO_ML[to_unit]
+
+def convert_weight(amount: float, from_unit: str, to_unit: str) -> Optional[float]:
+    """Convert between weight units. Returns None if conversion not possible."""
+    from_unit = normalize_unit(from_unit)
+    to_unit = normalize_unit(to_unit)
+    
+    if from_unit not in WEIGHT_TO_GRAMS or to_unit not in WEIGHT_TO_GRAMS:
+        return None
+    
+    # Convert to grams first, then to target unit
+    grams = amount * WEIGHT_TO_GRAMS[from_unit]
+    return grams / WEIGHT_TO_GRAMS[to_unit]
+
+def is_volume_unit(unit: str) -> bool:
+    """Check if a unit is a volume unit"""
+    return normalize_unit(unit) in VOLUME_TO_ML
+
+def is_weight_unit(unit: str) -> bool:
+    """Check if a unit is a weight unit"""
+    return normalize_unit(unit) in WEIGHT_TO_GRAMS
+
+def get_unit_in_base(amount: float, unit: str) -> tuple:
+    """
+    Convert amount to base unit (ml for volume, grams for weight).
+    Returns (converted_amount, base_unit) or (amount, unit) if no conversion.
+    """
+    unit_lower = normalize_unit(unit)
+    
+    if unit_lower in VOLUME_TO_ML:
+        return (amount * VOLUME_TO_ML[unit_lower], 'ml')
+    elif unit_lower in WEIGHT_TO_GRAMS:
+        return (amount * WEIGHT_TO_GRAMS[unit_lower], 'g')
+    
+    return (amount, unit)
+
+# Approximate conversions for dry goods (volume to weight)
+# These are rough estimates for common garden amendments
+# 1 tbsp of dry goods ≈ 0.35-0.5 oz depending on density
+# Using 0.4 oz per tbsp as a reasonable average for fertilizers/amendments
+DRY_GOODS_VOLUME_TO_WEIGHT = {
+    'tbsp': 0.4,  # oz per tbsp
+    'tablespoon': 0.4,
+    'tablespoons': 0.4,
+    'tsp': 0.13,  # oz per tsp
+    'teaspoon': 0.13,
+    'teaspoons': 0.13,
+    'cup': 6.4,   # oz per cup (approximately)
+    'cups': 6.4,
+}
+
+def convert_volume_to_weight_approx(amount: float, volume_unit: str) -> Optional[float]:
+    """
+    Approximate conversion from volume to weight (oz) for dry goods.
+    Returns amount in oz, or None if unit not recognized.
+    """
+    unit = normalize_unit(volume_unit)
+    if unit in DRY_GOODS_VOLUME_TO_WEIGHT:
+        return amount * DRY_GOODS_VOLUME_TO_WEIGHT[unit]
+    return None
+
+def calculate_ingredient_cost(ingredient_amount: float, ingredient_unit: str,
+                             product_price: float, product_size: float, product_unit: str) -> float:
+    """
+    Calculate the cost of using an ingredient based on product price.
+    Handles unit conversions automatically, including approximate volume-to-weight
+    conversions for dry goods (common in garden products).
+    
+    Args:
+        ingredient_amount: Amount of ingredient used
+        ingredient_unit: Unit of ingredient (e.g., 'tbsp')
+        product_price: Total price of the product
+        product_size: Size of the product package
+        product_unit: Unit of product size (e.g., 'lb')
+        
+    Returns:
+        Cost of the ingredient used, or 0 if units incompatible
+    """
+    ing_unit = normalize_unit(ingredient_unit)
+    prod_unit = normalize_unit(product_unit)
+    
+    if product_size <= 0 or product_price <= 0:
+        return 0.0
+    
+    # Check if both are volume or both are weight
+    if is_volume_unit(ing_unit) and is_volume_unit(prod_unit):
+        # Convert ingredient to same unit as product
+        converted_amount = convert_volume(ingredient_amount, ing_unit, prod_unit)
+        if converted_amount is not None:
+            price_per_unit = product_price / product_size
+            return converted_amount * price_per_unit
+            
+    elif is_weight_unit(ing_unit) and is_weight_unit(prod_unit):
+        # Convert ingredient to same unit as product
+        converted_amount = convert_weight(ingredient_amount, ing_unit, prod_unit)
+        if converted_amount is not None:
+            price_per_unit = product_price / product_size
+            return converted_amount * price_per_unit
+    
+    # Handle volume ingredient with weight product (common for dry goods)
+    elif is_volume_unit(ing_unit) and is_weight_unit(prod_unit):
+        # Convert volume to approximate weight in oz
+        oz_amount = convert_volume_to_weight_approx(ingredient_amount, ing_unit)
+        if oz_amount is not None:
+            # Convert oz to the product's weight unit
+            converted_amount = convert_weight(oz_amount, 'oz', prod_unit)
+            if converted_amount is not None:
+                price_per_unit = product_price / product_size
+                return converted_amount * price_per_unit
+    
+    # If same unit string, calculate directly
+    if ing_unit == prod_unit:
+        price_per_unit = product_price / product_size
+        return ingredient_amount * price_per_unit
+    
+    return 0.0
+
+
+# ============== Fuzzy Name Matching Utilities ==============
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name for comparison (lowercase, remove extra spaces/punctuation)"""
+    if not name:
+        return ''
+    # Lowercase and remove extra whitespace
+    normalized = ' '.join(name.lower().split())
+    # Remove common punctuation but keep hyphens
+    normalized = re.sub(r'[^\w\s-]', '', normalized)
+    return normalized
+
+def _calculate_similarity(str1: str, str2: str) -> float:
+    """
+    Calculate similarity between two strings (0.0 to 1.0).
+    Uses a combination of exact matching, word overlap, and substring matching.
+    """
+    s1 = _normalize_name(str1)
+    s2 = _normalize_name(str2)
+    
+    if not s1 or not s2:
+        return 0.0
+    
+    # Exact match
+    if s1 == s2:
+        return 1.0
+    
+    # One contains the other
+    if s1 in s2 or s2 in s1:
+        shorter = min(len(s1), len(s2))
+        longer = max(len(s1), len(s2))
+        return 0.8 + (0.2 * shorter / longer)
+    
+    # Word-based similarity
+    words1 = set(s1.split())
+    words2 = set(s2.split())
+    
+    if not words1 or not words2:
+        return 0.0
+    
+    # Jaccard similarity for words
+    intersection = words1 & words2
+    union = words1 | words2
+    word_similarity = len(intersection) / len(union) if union else 0.0
+    
+    # Partial word matching (for typos like "compos" vs "compost")
+    partial_matches = 0
+    for w1 in words1:
+        for w2 in words2:
+            if w1 != w2:
+                # Check if words are similar (one is prefix/suffix of other)
+                if len(w1) > 3 and len(w2) > 3:
+                    if w1.startswith(w2[:3]) or w2.startswith(w1[:3]):
+                        partial_matches += 0.5
+                    elif w1.endswith(w2[-3:]) or w2.endswith(w1[-3:]):
+                        partial_matches += 0.3
+    
+    partial_score = min(partial_matches / max(len(words1), len(words2)), 0.3)
+    
+    return min(word_similarity + partial_score, 1.0)
+
+def find_best_match(query: str, items: List[Dict[str, Any]], 
+                   name_key: str = 'name', threshold: float = 0.4) -> Optional[Dict[str, Any]]:
+    """
+    Find the best matching item from a list based on name similarity.
+    
+    Args:
+        query: The name to search for
+        items: List of items to search in
+        name_key: The key containing the name in each item
+        threshold: Minimum similarity score to consider a match (0.0 to 1.0)
+        
+    Returns:
+        The best matching item, or None if no match above threshold
+    """
+    if not query or not items:
+        return None
+    
+    best_match = None
+    best_score = 0.0
+    
+    query_normalized = _normalize_name(query)
+    
+    for item in items:
+        item_name = item.get(name_key, '')
+        
+        # Check primary name
+        score = _calculate_similarity(query, item_name)
+        
+        # Also check display_name if available
+        if 'display_name' in item:
+            alt_score = _calculate_similarity(query, item['display_name'])
+            score = max(score, alt_score)
+        
+        if score > best_score:
+            best_score = score
+            best_match = item
+    
+    if best_score >= threshold:
+        return best_match
+    
+    return None
+
+def find_recipe_by_name(name: str, threshold: float = 0.4) -> Optional[Dict[str, Any]]:
+    """
+    Find a recipe by name with fuzzy matching.
+    If only one recipe exists and threshold is met, returns it.
+    Otherwise finds the closest match above threshold.
+    """
+    recipes = list_recipes()
+    
+    if not recipes:
+        return None
+    
+    # If only one recipe and query is somewhat related, return it
+    if len(recipes) == 1:
+        single_recipe = recipes[0]
+        score = _calculate_similarity(name, single_recipe.get('name', ''))
+        # Lower threshold for single recipe case
+        if score >= 0.2:
+            return single_recipe
+    
+    return find_best_match(name, recipes, 'name', threshold)
+
+def find_product_by_name(name: str, threshold: float = 0.4) -> Optional[Dict[str, Any]]:
+    """
+    Find a product by name with fuzzy matching.
+    """
+    products = list_products()
+    
+    if not products:
+        return None
+    
+    return find_best_match(name, products, 'name', threshold)
+
+
 # ============== Core MD File Operations ==============
 
 def read_md_file(filepath: Path) -> Optional[Dict[str, Any]]:
@@ -952,23 +1269,65 @@ def update_note(note_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any
 # ============== Recipe Operations ==============
 
 def create_recipe(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Create a new compost tea / nutrient recipe"""
+    """Create a new compost tea / nutrient recipe with automatic cost calculation from products"""
     base = get_storage_path()
     ensure_directories()
     
     recipe_id = generate_id()
     now = datetime.now()
     
-    # Calculate total cost from ingredients
+    # Process ingredients and link to products for cost calculation
     ingredients = data.get('ingredients', [])
-    total_cost = sum(ing.get('cost', 0) for ing in ingredients)
+    processed_ingredients = []
+    total_cost = 0.0
+    
+    for ing in ingredients:
+        ing_name = ing.get('name', '')
+        ing_amount = ing.get('amount', 0) or 0
+        ing_unit = ing.get('unit', '')
+        
+        # Try to find matching product for cost calculation
+        product = find_product_by_name(ing_name)
+        
+        if product:
+            product_price = product.get('price', product.get('purchase_price', 0)) or 0
+            product_size = product.get('size_amount', 1) or 1
+            product_unit = product.get('size_unit', '')
+            
+            # Calculate cost using unit conversion
+            ing_cost = calculate_ingredient_cost(
+                ing_amount, ing_unit,
+                product_price, product_size, product_unit
+            )
+            
+            processed_ingredients.append({
+                'name': ing_name,
+                'amount': ing_amount,
+                'unit': ing_unit,
+                'product_id': product.get('id'),
+                'product_name': product.get('name'),
+                'cost': round(ing_cost, 4)
+            })
+            total_cost += ing_cost
+        else:
+            # No matching product, use provided cost or 0
+            ing_cost = ing.get('cost', 0) or 0
+            processed_ingredients.append({
+                'name': ing_name,
+                'amount': ing_amount,
+                'unit': ing_unit,
+                'cost': ing_cost
+            })
+            total_cost += ing_cost
+    
+    total_cost = round(total_cost, 2)
     
     metadata = {
         'id': recipe_id,
         'name': data.get('name', 'Untitled Recipe'),
         'type': data.get('type', 'compost_tea'),
         'description': data.get('description', ''),
-        'ingredients': ingredients,
+        'ingredients': processed_ingredients,
         'instructions': data.get('instructions', ''),
         'brew_time_hours': data.get('brew_time_hours'),
         'yield_amount': data.get('yield_amount'),
@@ -980,8 +1339,8 @@ def create_recipe(data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Build ingredient table for MD content
     ingredient_table = "| Ingredient | Amount | Unit | Cost |\n|------------|--------|------|------|\n"
-    for ing in ingredients:
-        ingredient_table += f"| {ing.get('name', '')} | {ing.get('amount', '')} | {ing.get('unit', '')} | ${ing.get('cost', 0):.2f} |\n"
+    for ing in processed_ingredients:
+        ingredient_table += f"| {ing.get('name', '')} | {ing.get('amount', '')} | {ing.get('unit', '')} | ${ing.get('cost', 0):.4f} |\n"
     
     content = f"""# {data.get('name', 'Untitled Recipe')}
 
@@ -1040,14 +1399,56 @@ def list_recipes(recipe_type: str = None) -> List[Dict[str, Any]]:
 
 
 def update_recipe(recipe_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update a recipe"""
+    """Update a recipe with automatic cost recalculation"""
     base = get_storage_path()
     for filepath in (base / 'recipes').glob('*.md'):
         data = read_md_file(filepath)
         if data and data['metadata'].get('id') == recipe_id:
-            # Recalculate total cost if ingredients changed
+            # Recalculate costs if ingredients changed
             if 'ingredients' in updates:
-                updates['total_cost'] = sum(ing.get('cost', 0) for ing in updates['ingredients'])
+                processed_ingredients = []
+                total_cost = 0.0
+                
+                for ing in updates['ingredients']:
+                    ing_name = ing.get('name', '')
+                    ing_amount = ing.get('amount', 0) or 0
+                    ing_unit = ing.get('unit', '')
+                    
+                    # Try to find matching product for cost calculation
+                    product = find_product_by_name(ing_name)
+                    
+                    if product:
+                        product_price = product.get('price', product.get('purchase_price', 0)) or 0
+                        product_size = product.get('size_amount', 1) or 1
+                        product_unit = product.get('size_unit', '')
+                        
+                        ing_cost = calculate_ingredient_cost(
+                            ing_amount, ing_unit,
+                            product_price, product_size, product_unit
+                        )
+                        
+                        processed_ingredients.append({
+                            'name': ing_name,
+                            'amount': ing_amount,
+                            'unit': ing_unit,
+                            'product_id': product.get('id'),
+                            'product_name': product.get('name'),
+                            'cost': round(ing_cost, 4)
+                        })
+                        total_cost += ing_cost
+                    else:
+                        ing_cost = ing.get('cost', 0) or 0
+                        processed_ingredients.append({
+                            'name': ing_name,
+                            'amount': ing_amount,
+                            'unit': ing_unit,
+                            'cost': ing_cost
+                        })
+                        total_cost += ing_cost
+                
+                updates['ingredients'] = processed_ingredients
+                updates['total_cost'] = round(total_cost, 2)
+            
             if update_md_file(filepath, updates):
                 return get_recipe(recipe_id)
     return None
@@ -1073,10 +1474,13 @@ def create_product(data: Dict[str, Any]) -> Dict[str, Any]:
     product_id = generate_id()
     now = datetime.now()
     
+    # Handle both 'price' and 'purchase_price' for compatibility
+    size_amount = data.get('size_amount', 1) or 1
+    price = data.get('price', data.get('purchase_price', 0)) or 0
+    size_unit = data.get('size_unit', 'oz')
+    
     # Calculate price per unit
-    size_amount = data.get('size_amount', 1)
-    purchase_price = data.get('purchase_price', 0)
-    price_per_unit = purchase_price / size_amount if size_amount else 0
+    price_per_unit = price / size_amount if size_amount > 0 else 0
     
     metadata = {
         'id': product_id,
@@ -1084,11 +1488,13 @@ def create_product(data: Dict[str, Any]) -> Dict[str, Any]:
         'brand': data.get('brand', ''),
         'category': data.get('category', 'fertilizer'),  # fertilizer, amendment, pesticide, tool, etc.
         'size_amount': size_amount,
-        'size_unit': data.get('size_unit', 'oz'),
-        'purchase_price': purchase_price,
+        'size_unit': size_unit,
+        'price': price,  # Use 'price' as primary field
+        'purchase_price': price,  # Keep for backward compatibility
         'price_per_unit': price_per_unit,
         'npk_ratio': data.get('npk_ratio', ''),
         'purchase_date': data.get('purchase_date', now.strftime('%Y-%m-%d')),
+        'store': data.get('store', ''),
         'created_at': now.isoformat(),
         'tags': ['budget', 'product', data.get('category', 'fertilizer')]
     }
@@ -1097,9 +1503,9 @@ def create_product(data: Dict[str, Any]) -> Dict[str, Any]:
 
 **Brand:** {data.get('brand', 'N/A')}
 **Category:** {data.get('category', 'fertilizer')}
-**Size:** {size_amount} {data.get('size_unit', 'oz')}
-**Price:** ${purchase_price:.2f}
-**Price per {data.get('size_unit', 'unit')}:** ${price_per_unit:.2f}
+**Size:** {size_amount} {size_unit}
+**Price:** ${price:.2f}
+**Price per {size_unit}:** ${price_per_unit:.4f}
 **NPK:** {data.get('npk_ratio', 'N/A')}
 **Purchased:** {data.get('purchase_date', 'Unknown')}
 
@@ -1108,6 +1514,8 @@ def create_product(data: Dict[str, Any]) -> Dict[str, Any]:
 """
     
     filename = sanitize_filename(f"{data.get('brand', '')}-{data.get('name', product_id)}")
+    if not filename or filename == '-':
+        filename = sanitize_filename(data.get('name', product_id))
     filepath = base / 'budget' / 'products' / f'{filename}.md'
     
     counter = 1
@@ -1121,17 +1529,24 @@ def create_product(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_product(product_id: str) -> Optional[Dict[str, Any]]:
-    """Get a product by ID"""
+    """Get a product by ID with normalized price fields"""
     base = get_storage_path()
     for filepath in (base / 'budget' / 'products').glob('*.md'):
         data = read_md_file(filepath)
         if data and data['metadata'].get('id') == product_id:
-            return data['metadata']
+            meta = data['metadata']
+            # Normalize price fields - use 'price' as primary, fall back to 'purchase_price'
+            price = meta.get('price', meta.get('purchase_price', 0)) or 0
+            size_amount = meta.get('size_amount', 1) or 1
+            meta['price'] = price
+            meta['purchase_price'] = price
+            meta['price_per_unit'] = price / size_amount if size_amount > 0 else 0
+            return meta
     return None
 
 
 def list_products(category: str = None) -> List[Dict[str, Any]]:
-    """List all products, optionally filtered by category"""
+    """List all products, optionally filtered by category, with normalized price fields"""
     base = get_storage_path()
     products = []
     
@@ -1141,6 +1556,12 @@ def list_products(category: str = None) -> List[Dict[str, Any]]:
             meta = data['metadata']
             if category and meta.get('category') != category:
                 continue
+            # Normalize price fields
+            price = meta.get('price', meta.get('purchase_price', 0)) or 0
+            size_amount = meta.get('size_amount', 1) or 1
+            meta['price'] = price
+            meta['purchase_price'] = price
+            meta['price_per_unit'] = price / size_amount if size_amount > 0 else 0
             products.append(meta)
     
     return sorted(products, key=lambda x: x.get('name', ''))
@@ -1152,11 +1573,15 @@ def update_product(product_id: str, updates: Dict[str, Any]) -> Optional[Dict[st
     for filepath in (base / 'budget' / 'products').glob('*.md'):
         data = read_md_file(filepath)
         if data and data['metadata'].get('id') == product_id:
-            # Recalculate price per unit if needed
-            if 'size_amount' in updates or 'purchase_price' in updates:
-                size = updates.get('size_amount', data['metadata'].get('size_amount', 1))
-                price = updates.get('purchase_price', data['metadata'].get('purchase_price', 0))
-                updates['price_per_unit'] = price / size if size else 0
+            # Handle both 'price' and 'purchase_price' for compatibility
+            if 'price' in updates or 'purchase_price' in updates or 'size_amount' in updates:
+                size = updates.get('size_amount', data['metadata'].get('size_amount', 1)) or 1
+                # Accept either price or purchase_price
+                price = updates.get('price', updates.get('purchase_price', 
+                         data['metadata'].get('price', data['metadata'].get('purchase_price', 0)))) or 0
+                updates['price'] = price
+                updates['purchase_price'] = price  # Keep in sync
+                updates['price_per_unit'] = price / size if size > 0 else 0
             if update_md_file(filepath, updates):
                 return get_product(product_id)
     return None

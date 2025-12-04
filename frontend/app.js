@@ -837,9 +837,14 @@ function renderNotes(noteList) {
             <div class="note-item">
                 <div class="note-header">
                     <span class="note-date">${formatDate(new Date(note.created_at))}</span>
-                    <span class="note-badge ${note.processed ? 'processed' : 'pending'}">
-                        ${note.processed ? '✓ Processed' : 'Pending'}
-                    </span>
+                    <div class="note-header-right">
+                        <span class="note-badge ${note.processed ? 'processed' : 'pending'}">
+                            ${note.processed ? '✓ Processed' : 'Pending'}
+                        </span>
+                        <button class="btn btn-icon btn-danger-outline" onclick="deleteNote('${note.id}')" title="Delete Note">
+                            🗑️
+                        </button>
+                    </div>
                 </div>
                 <div class="note-text">${note.raw_text}</div>
                 ${actions.length ? `
@@ -852,6 +857,19 @@ function renderNotes(noteList) {
             </div>
         `;
     }).join('');
+}
+
+async function deleteNote(noteId) {
+    if (!confirm('Are you sure you want to delete this note? This cannot be undone.')) return;
+    
+    try {
+        await fetch(`${API_BASE}/notes/${noteId}`, { method: 'DELETE' });
+        showToast('Note deleted', 'success');
+        await loadNotes();
+    } catch (error) {
+        console.error('Failed to delete note:', error);
+        showToast('Failed to delete note', 'error');
+    }
 }
 
 // ============== Weather ==============
@@ -2450,6 +2468,7 @@ window.viewPlant = viewPlant;
 window.logGrowth = logGrowth;
 window.logWatering = logWatering;
 window.deletePlant = deletePlant;
+window.deleteNote = deleteNote;
 window.closeModal = closeModal;
 window.addIngredientRow = addIngredientRow;
 window.editRecipe = editRecipe;

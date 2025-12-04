@@ -31,7 +31,7 @@ from md_service import (
     # Weather
     create_weather_log, list_weather_logs,
     # Notes
-    create_note, list_notes, update_note,
+    create_note, list_notes, update_note, delete_note,
     # Recipes
     create_recipe, get_recipe, list_recipes, update_recipe, delete_recipe,
     find_recipe_by_name,
@@ -918,6 +918,14 @@ def add_note():
     if note:
         return jsonify(note), 201
     return jsonify({'error': 'Failed to create note'}), 500
+
+
+@app.route('/api/notes/<note_id>', methods=['DELETE'])
+def delete_note_endpoint(note_id):
+    """Delete a note"""
+    if delete_note(note_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Note not found'}), 404
 
 
 # ============== Recipe Endpoints ==============

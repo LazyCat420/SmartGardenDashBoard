@@ -1266,6 +1266,16 @@ def update_note(note_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any
     return None
 
 
+def delete_note(note_id: str) -> bool:
+    """Delete a note"""
+    base = get_storage_path()
+    for filepath in (base / 'notes').glob('*.md'):
+        data = read_md_file(filepath)
+        if data and data['metadata'].get('id') == note_id:
+            return delete_md_file(filepath)
+    return False
+
+
 # ============== Recipe Operations ==============
 
 def create_recipe(data: Dict[str, Any]) -> Dict[str, Any]:

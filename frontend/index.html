@@ -3,10 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>🌱 Smart Garden Dashboard</title>
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -49,12 +52,19 @@
                     <span class="nav-icon">🌤️</span>
                     <span>Weather</span>
                 </a>
+                <a href="#" class="nav-item" data-page="scanner">
+                    <span class="nav-icon">📷</span>
+                    <span>Scanner</span>
+                </a>
             </nav>
             <div class="llm-status">
                 <span class="status-dot" id="llmStatusDot"></span>
                 <span id="llmStatusText">Checking LLM...</span>
             </div>
         </aside>
+
+        <!-- Mobile Menu Toggle -->
+        <button class="mobile-menu-toggle" id="mobileMenuToggle">☰</button>
 
         <!-- Main Content -->
         <main class="main-content">
@@ -253,6 +263,105 @@
                     <button class="btn btn-primary" id="addWeatherBtn">+ Log Weather</button>
                 </div>
                 <div id="weatherList" class="weather-list"></div>
+            </div>
+
+            <!-- Scanner Page -->
+            <div class="page" id="scannerPage">
+                <div class="page-header">
+                    <h2>📷 Plant Scanner</h2>
+                </div>
+                
+                <!-- Scanner Mode Tabs -->
+                <div class="scanner-tabs">
+                    <button class="scanner-tab active" data-mode="scan">🔍 Scan QR</button>
+                    <button class="scanner-tab" data-mode="create">📸 New Plant</button>
+                </div>
+
+                <!-- Scan QR Mode -->
+                <div class="scanner-mode active" id="scanMode">
+                    <div class="scanner-container">
+                        <div id="qrReader" class="qr-reader"></div>
+                        <div class="scanner-instructions">
+                            <p>Point your camera at a plant's QR code to quickly log data</p>
+                        </div>
+                        <div class="scanner-controls">
+                            <button class="btn btn-primary" id="startScannerBtn">📷 Start Scanner</button>
+                            <button class="btn btn-secondary hidden" id="stopScannerBtn">⏹️ Stop Scanner</button>
+                        </div>
+                    </div>
+
+                    <!-- Scan Result Panel -->
+                    <div class="scan-result hidden" id="scanResult">
+                        <div class="scan-result-header">
+                            <div class="scan-plant-info">
+                                <span class="scan-plant-icon">🌱</span>
+                                <div>
+                                    <h3 id="scanPlantName">Plant Name</h3>
+                                    <p id="scanPlantCode" class="plant-code-small">CODE-001</p>
+                                </div>
+                            </div>
+                            <span class="scan-plant-status" id="scanPlantStatus">active</span>
+                        </div>
+                        <div class="scan-quick-actions">
+                            <button class="btn btn-sm" onclick="scanQuickAction('water')">💧 Water</button>
+                            <button class="btn btn-sm" onclick="scanQuickAction('growth')">📏 Growth</button>
+                            <button class="btn btn-sm" onclick="scanQuickAction('harvest')">🥕 Harvest</button>
+                            <button class="btn btn-sm" onclick="scanQuickAction('pest')">🐛 Issue</button>
+                        </div>
+                        <div class="scan-note-input">
+                            <label>Quick Note</label>
+                            <textarea id="scanNoteInput" placeholder="e.g., Watered with compost tea, plant is 25cm tall, looking healthy..."></textarea>
+                            <input type="hidden" id="scanPlantId">
+                            <div class="scan-note-actions">
+                                <button class="btn btn-secondary" id="clearScanBtn">Clear</button>
+                                <button class="btn btn-primary" id="processScanNoteBtn">
+                                    <span class="btn-icon">✨</span> Process with AI
+                                </button>
+                            </div>
+                        </div>
+                        <div id="scanExtractedActions" class="extracted-actions hidden"></div>
+                    </div>
+                </div>
+
+                <!-- Create New Plant Mode -->
+                <div class="scanner-mode" id="createMode">
+                    <div class="create-plant-container">
+                        <div class="photo-capture">
+                            <div class="photo-preview" id="photoPreview">
+                                <span class="photo-placeholder">📷</span>
+                                <p>Tap to take photo</p>
+                            </div>
+                            <input type="file" id="plantPhotoInput" accept="image/*" capture="environment" class="hidden" title="Take or select plant photo">
+                        </div>
+                        <div class="create-plant-form">
+                            <div class="form-group">
+                                <label>Plant Name *</label>
+                                <input type="text" id="scanPlantNameInput" placeholder="e.g., Tomato">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Variety</label>
+                                    <input type="text" id="scanVarietyInput" placeholder="e.g., Cherry">
+                                </div>
+                                <div class="form-group">
+                                    <label>Quantity</label>
+                                    <input type="number" id="scanQuantityInput" value="1" min="1" title="Number of plants">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Location</label>
+                                <input type="text" id="scanLocationInput" placeholder="e.g., Raised Bed A">
+                            </div>
+                            <div class="form-group">
+                                <label>Notes</label>
+                                <textarea id="scanNotesInput" placeholder="Any initial notes about this plant..."></textarea>
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="createScanPlantBtn">🌱 Create Plant & Generate QR</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>

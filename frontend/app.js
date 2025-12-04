@@ -21,6 +21,9 @@ let budgetCategoryChart = null;
 let budgetMonthlyChart = null;
 let plantGrowthChart = null;
 let plantWateringChart = null;
+let html5QrCode = null;
+let scannedPlant = null;
+let capturedPhotoData = null;
 
 // ============== DOM Elements ==============
 const elements = {
@@ -85,7 +88,36 @@ const elements = {
     modalClose: document.getElementById('modalClose'),
     
     // Toast
-    toastContainer: document.getElementById('toastContainer')
+    toastContainer: document.getElementById('toastContainer'),
+    
+    // Mobile Menu
+    mobileMenuToggle: document.getElementById('mobileMenuToggle'),
+    sidebar: document.querySelector('.sidebar'),
+    
+    // Scanner
+    scannerTabs: document.querySelectorAll('.scanner-tab'),
+    scanMode: document.getElementById('scanMode'),
+    createMode: document.getElementById('createMode'),
+    qrReader: document.getElementById('qrReader'),
+    startScannerBtn: document.getElementById('startScannerBtn'),
+    stopScannerBtn: document.getElementById('stopScannerBtn'),
+    scanResult: document.getElementById('scanResult'),
+    scanPlantName: document.getElementById('scanPlantName'),
+    scanPlantCode: document.getElementById('scanPlantCode'),
+    scanPlantStatus: document.getElementById('scanPlantStatus'),
+    scanPlantId: document.getElementById('scanPlantId'),
+    scanNoteInput: document.getElementById('scanNoteInput'),
+    processScanNoteBtn: document.getElementById('processScanNoteBtn'),
+    clearScanBtn: document.getElementById('clearScanBtn'),
+    scanExtractedActions: document.getElementById('scanExtractedActions'),
+    photoPreview: document.getElementById('photoPreview'),
+    plantPhotoInput: document.getElementById('plantPhotoInput'),
+    scanPlantNameInput: document.getElementById('scanPlantNameInput'),
+    scanVarietyInput: document.getElementById('scanVarietyInput'),
+    scanQuantityInput: document.getElementById('scanQuantityInput'),
+    scanLocationInput: document.getElementById('scanLocationInput'),
+    scanNotesInput: document.getElementById('scanNotesInput'),
+    createScanPlantBtn: document.getElementById('createScanPlantBtn')
 };
 
 // ============== Initialization ==============
@@ -108,6 +140,8 @@ async function initApp() {
     setupFilters();
     setupButtons();
     setupModal();
+    setupMobileMenu();
+    setupScanner();
     
     // Check LLM status
     checkLLMStatus();
@@ -229,7 +263,8 @@ function navigateTo(page) {
         budget: 'Budget & Nutrients',
         harvests: 'Harvest Log',
         notes: 'Garden Notes',
-        weather: 'Weather Log'
+        weather: 'Weather Log',
+        scanner: 'Plant Scanner'
     };
     elements.pageTitle.textContent = titles[page] || page;
     
@@ -262,6 +297,9 @@ async function loadPageData(page) {
             break;
         case 'weather':
             await loadWeather();
+            break;
+        case 'scanner':
+            initScannerPage();
             break;
     }
 }
@@ -2418,3 +2456,534 @@ window.deleteRecipe = deleteRecipe;
 window.editProduct = editProduct;
 window.deleteProduct = deleteProduct;
 window.showLabel = showLabel;
+window.scanQuickAction = scanQuickAction;
+window.applyScanActions = applyScanActions;
+window.cancelScanActions = cancelScanActions;
+
+// ============== Mobile Menu ==============
+function setupMobileMenu() {
+    if (elements.mobileMenuToggle) {
+        elements.mobileMenuToggle.addEventListener('click', () => {
+            elements.sidebar.classList.toggle('open');
+        });
+        
+        // Close sidebar when clicking outside on mobile
+        document.addEventListener('click', (e) => {
+            if (window.innerWidth <= 768 && 
+                elements.sidebar.classList.contains('open') &&
+                !elements.sidebar.contains(e.target) &&
+                !elements.mobileMenuToggle.contains(e.target)) {
+                elements.sidebar.classList.remove('open');
+            }
+        });
+        
+        // Close sidebar when navigating on mobile
+        elements.navItems.forEach(item => {
+            item.addEventListener('click', () => {
+                if (window.innerWidth <= 768) {
+                    elements.sidebar.classList.remove('open');
+                }
+            });
+        });
+    }
+}
+
+// ============== Scanner Page ==============
+function setupScanner() {
+    // Scanner mode tabs
+    if (elements.scannerTabs) {
+        elements.scannerTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const mode = tab.dataset.mode;
+                switchScannerMode(mode);
+            });
+        });
+    }
+    
+    // Start/Stop Scanner buttons
+    if (elements.startScannerBtn) {
+        elements.startScannerBtn.addEventListener('click', startScanner);
+    }
+    if (elements.stopScannerBtn) {
+        elements.stopScannerBtn.addEventListener('click', stopScanner);
+    }
+    
+    // Process scanned note with AI
+    if (elements.processScanNoteBtn) {
+        elements.processScanNoteBtn.addEventListener('click', processScanNote);
+    }
+    
+    // Clear scan result
+    if (elements.clearScanBtn) {
+        elements.clearScanBtn.addEventListener('click', clearScanResult);
+    }
+    
+    // Photo capture
+    if (elements.photoPreview) {
+        elements.photoPreview.addEventListener('click', () => {
+            elements.plantPhotoInput?.click();
+        });
+    }
+    if (elements.plantPhotoInput) {
+        elements.plantPhotoInput.addEventListener('change', handlePhotoCapture);
+    }
+    
+    // Create plant from scanner
+    if (elements.createScanPlantBtn) {
+        elements.createScanPlantBtn.addEventListener('click', createPlantFromScanner);
+    }
+}
+
+function initScannerPage() {
+    // Ensure plants are loaded for scanning
+    if (plants.length === 0) {
+        loadPlants();
+    }
+    // Stop any running scanner when leaving page
+    stopScanner();
+}
+
+function switchScannerMode(mode) {
+    // Update tabs
+    elements.scannerTabs.forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+    
+    // Update mode visibility
+    if (elements.scanMode) {
+        elements.scanMode.classList.toggle('active', mode === 'scan');
+    }
+    if (elements.createMode) {
+        elements.createMode.classList.toggle('active', mode === 'create');
+    }
+    
+    // Stop scanner when switching to create mode
+    if (mode === 'create') {
+        stopScanner();
+    }
+}
+
+async function startScanner() {
+    try {
+        // Initialize html5-qrcode if not already done
+        if (!html5QrCode) {
+            html5QrCode = new Html5Qrcode("qrReader");
+        }
+        
+        const config = {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.0
+        };
+        
+        await html5QrCode.start(
+            { facingMode: "environment" },
+            config,
+            onScanSuccess,
+            onScanFailure
+        );
+        
+        // Update UI
+        elements.startScannerBtn.classList.add('hidden');
+        elements.stopScannerBtn.classList.remove('hidden');
+        showToast('Scanner started', 'success');
+        
+    } catch (error) {
+        console.error('Failed to start scanner:', error);
+        showToast('Could not start camera. Please allow camera access.', 'error');
+    }
+}
+
+async function stopScanner() {
+    try {
+        if (html5QrCode && html5QrCode.isScanning) {
+            await html5QrCode.stop();
+        }
+    } catch (error) {
+        console.error('Error stopping scanner:', error);
+    }
+    
+    // Update UI
+    if (elements.startScannerBtn) {
+        elements.startScannerBtn.classList.remove('hidden');
+    }
+    if (elements.stopScannerBtn) {
+        elements.stopScannerBtn.classList.add('hidden');
+    }
+}
+
+function onScanSuccess(decodedText, decodedResult) {
+    console.log('Scanned:', decodedText);
+    
+    // Parse the scanned URL
+    // Expected format: http://host/plant/CODE-001 or just CODE-001
+    let plantCode = decodedText;
+    
+    // Try to extract code from URL
+    const urlMatch = decodedText.match(/\/plant\/([A-Z]{3}-\d+)/i);
+    if (urlMatch) {
+        plantCode = urlMatch[1];
+    }
+    
+    // Find plant by unique_code
+    const plant = plants.find(p => 
+        p.unique_code && p.unique_code.toUpperCase() === plantCode.toUpperCase()
+    );
+    
+    if (plant) {
+        // Stop scanner after successful scan
+        stopScanner();
+        
+        // Store scanned plant reference
+        scannedPlant = plant;
+        
+        // Show scan result panel
+        showScanResult(plant);
+        showToast(`Found: ${plant.display_name || plant.name}`, 'success');
+    } else {
+        // Plant not found - could be first scan ever or invalid code
+        showToast(`No plant found with code: ${plantCode}`, 'error');
+    }
+}
+
+function onScanFailure(error) {
+    // Silently ignore scan failures (no QR in view)
+    // Only log if it's not a "No QR code found" error
+    if (!error.includes('No QR code found')) {
+        console.warn('QR scan error:', error);
+    }
+}
+
+function showScanResult(plant) {
+    if (!elements.scanResult) return;
+    
+    const displayName = plant.display_name || plant.name;
+    
+    // Populate plant info
+    elements.scanPlantName.textContent = displayName;
+    elements.scanPlantCode.textContent = plant.unique_code || 'N/A';
+    elements.scanPlantStatus.textContent = plant.status;
+    elements.scanPlantStatus.className = `scan-plant-status ${plant.status}`;
+    elements.scanPlantId.value = plant.id;
+    
+    // Clear previous note and actions
+    elements.scanNoteInput.value = '';
+    elements.scanExtractedActions.classList.add('hidden');
+    elements.scanExtractedActions.innerHTML = '';
+    
+    // Show the result panel
+    elements.scanResult.classList.remove('hidden');
+    
+    // Scroll to result
+    elements.scanResult.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function clearScanResult() {
+    scannedPlant = null;
+    
+    if (elements.scanResult) {
+        elements.scanResult.classList.add('hidden');
+    }
+    if (elements.scanNoteInput) {
+        elements.scanNoteInput.value = '';
+    }
+    if (elements.scanExtractedActions) {
+        elements.scanExtractedActions.classList.add('hidden');
+        elements.scanExtractedActions.innerHTML = '';
+    }
+}
+
+// Quick action buttons add pre-filled text
+function scanQuickAction(action) {
+    if (!scannedPlant) return;
+    
+    const displayName = scannedPlant.display_name || scannedPlant.name;
+    let prefill = '';
+    
+    switch (action) {
+        case 'water':
+            prefill = `Watered ${displayName}. `;
+            break;
+        case 'growth':
+            prefill = `${displayName} is now cm tall, health rating /10. `;
+            break;
+        case 'harvest':
+            prefill = `Harvested from ${displayName}: `;
+            break;
+        case 'pest':
+            prefill = `Found issue on ${displayName}: `;
+            break;
+    }
+    
+    elements.scanNoteInput.value = prefill;
+    elements.scanNoteInput.focus();
+    
+    // Position cursor where user should type
+    const cursorPos = prefill.indexOf('cm') > 0 ? prefill.indexOf('cm') - 1 : prefill.length;
+    elements.scanNoteInput.setSelectionRange(cursorPos, cursorPos);
+}
+
+async function processScanNote() {
+    const note = elements.scanNoteInput.value.trim();
+    
+    if (!note) {
+        showToast('Please enter a note first', 'error');
+        return;
+    }
+    
+    if (!scannedPlant) {
+        showToast('No plant selected', 'error');
+        return;
+    }
+    
+    elements.processScanNoteBtn.disabled = true;
+    elements.processScanNoteBtn.innerHTML = '<span class="btn-icon">⏳</span> Processing...';
+    
+    try {
+        // Add plant context to the note
+        const displayName = scannedPlant.display_name || scannedPlant.name;
+        const contextNote = `[For plant: ${displayName} (${scannedPlant.unique_code})] ${note}`;
+        
+        const response = await fetch(`${API_BASE}/llm/process-note`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                note: contextNote,
+                plant_context: {
+                    id: scannedPlant.id,
+                    name: scannedPlant.name,
+                    unique_code: scannedPlant.unique_code
+                }
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.actions && data.actions.length > 0) {
+            // Auto-set plant_id for actions that need it
+            data.actions = data.actions.map(action => {
+                if (['log_watering', 'log_fertilization', 'log_growth', 'log_harvest', 'report_pest', 'update_status'].includes(action.action)) {
+                    action.parameters = action.parameters || {};
+                    action.parameters.plant_id = scannedPlant.id;
+                    action.parameters.plant_name = scannedPlant.name;
+                }
+                return action;
+            });
+            
+            displayScanExtractedActions(data.actions);
+            showToast(`Found ${data.actions.length} action(s)`, 'success');
+        } else {
+            showToast('No actions detected in note', 'error');
+        }
+    } catch (error) {
+        console.error('Failed to process note:', error);
+        showToast('Failed to process note with AI', 'error');
+    } finally {
+        elements.processScanNoteBtn.disabled = false;
+        elements.processScanNoteBtn.innerHTML = '<span class="btn-icon">✨</span> Process with AI';
+    }
+}
+
+function displayScanExtractedActions(actions) {
+    const container = elements.scanExtractedActions;
+    
+    const actionIcons = {
+        'add_plant': '🌱',
+        'log_watering': '💧',
+        'log_fertilization': '🧪',
+        'log_growth': '📏',
+        'log_harvest': '🥕',
+        'report_pest': '🐛',
+        'create_task': '✅',
+        'log_weather': '🌤️',
+        'update_status': '📊',
+        'add_budget_item': '💰'
+    };
+    
+    let html = `
+        <h4>Extracted Actions</h4>
+        <div class="actions-list">
+    `;
+    
+    actions.forEach((action, index) => {
+        const icon = actionIcons[action.action] || '📝';
+        const params = Object.entries(action.parameters || {})
+            .filter(([key]) => !['plant_id'].includes(key))
+            .map(([key, value]) => `<span class="param">${key}: ${value}</span>`)
+            .join('');
+        
+        html += `
+            <div class="action-item">
+                <span class="action-icon">${icon}</span>
+                <div class="action-details">
+                    <strong>${action.action.replace(/_/g, ' ')}</strong>
+                    <div class="action-params">${params}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `
+        </div>
+        <div class="actions-buttons">
+            <button class="btn btn-secondary" onclick="cancelScanActions()">Cancel</button>
+            <button class="btn btn-primary" onclick="applyScanActions()">Apply All Actions</button>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+    container.classList.remove('hidden');
+    
+    // Store actions for applying
+    container.dataset.actions = JSON.stringify(actions);
+}
+
+async function applyScanActions() {
+    const container = elements.scanExtractedActions;
+    const actions = JSON.parse(container.dataset.actions || '[]');
+    
+    if (actions.length === 0) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/llm/apply-actions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ actions })
+        });
+        
+        const data = await response.json();
+        
+        showToast(data.message || 'Actions applied successfully!', 'success');
+        
+        // Clear the scan result and reload data
+        clearScanResult();
+        await loadPlants();
+        await loadDashboardData();
+        
+    } catch (error) {
+        console.error('Failed to apply actions:', error);
+        showToast('Failed to apply actions', 'error');
+    }
+}
+
+function cancelScanActions() {
+    elements.scanExtractedActions.classList.add('hidden');
+    elements.scanExtractedActions.innerHTML = '';
+}
+
+// ============== Photo Capture for New Plant ==============
+function handlePhotoCapture(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        capturedPhotoData = e.target.result;
+        
+        // Update preview
+        const preview = elements.photoPreview;
+        preview.innerHTML = `<img src="${capturedPhotoData}" alt="Plant photo">`;
+        preview.classList.add('has-image');
+    };
+    reader.readAsDataURL(file);
+}
+
+async function createPlantFromScanner() {
+    const name = elements.scanPlantNameInput?.value.trim();
+    const variety = elements.scanVarietyInput?.value.trim();
+    const quantity = parseInt(elements.scanQuantityInput?.value) || 1;
+    const location = elements.scanLocationInput?.value.trim();
+    const notes = elements.scanNotesInput?.value.trim();
+    
+    if (!name) {
+        showToast('Please enter a plant name', 'error');
+        return;
+    }
+    
+    elements.createScanPlantBtn.disabled = true;
+    elements.createScanPlantBtn.textContent = 'Creating...';
+    
+    try {
+        const plantData = {
+            name,
+            variety,
+            quantity,
+            location,
+            notes,
+            date_planted: new Date().toISOString().split('T')[0]
+        };
+        
+        const response = await fetch(`${API_BASE}/plants`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(plantData)
+        });
+        
+        const data = await response.json();
+        
+        if (data.id || data.ids) {
+            const plantId = data.id || data.ids[0];
+            
+            // If we have a photo, upload it
+            if (capturedPhotoData && plantId) {
+                await uploadPlantPhoto(plantId, capturedPhotoData);
+            }
+            
+            showToast('Plant created! Generating QR code...', 'success');
+            
+            // Reload plants and show the label
+            await loadPlants();
+            
+            // Show the QR label for the new plant
+            setTimeout(() => {
+                showLabel(plantId);
+            }, 500);
+            
+            // Reset form
+            resetScannerCreateForm();
+        }
+    } catch (error) {
+        console.error('Failed to create plant:', error);
+        showToast('Failed to create plant', 'error');
+    } finally {
+        elements.createScanPlantBtn.disabled = false;
+        elements.createScanPlantBtn.textContent = '🌱 Create Plant & Generate QR';
+    }
+}
+
+async function uploadPlantPhoto(plantId, photoData) {
+    try {
+        const response = await fetch(`${API_BASE}/plant/${plantId}/image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_data: photoData })
+        });
+        
+        if (response.ok) {
+            console.log('Photo uploaded successfully');
+        }
+    } catch (error) {
+        console.error('Failed to upload photo:', error);
+        // Don't show error - photo upload is optional
+    }
+}
+
+function resetScannerCreateForm() {
+    if (elements.scanPlantNameInput) elements.scanPlantNameInput.value = '';
+    if (elements.scanVarietyInput) elements.scanVarietyInput.value = '';
+    if (elements.scanQuantityInput) elements.scanQuantityInput.value = '1';
+    if (elements.scanLocationInput) elements.scanLocationInput.value = '';
+    if (elements.scanNotesInput) elements.scanNotesInput.value = '';
+    if (elements.plantPhotoInput) elements.plantPhotoInput.value = '';
+    
+    // Reset photo preview
+    if (elements.photoPreview) {
+        elements.photoPreview.innerHTML = `
+            <span class="photo-placeholder">📷</span>
+            <p>Tap to take photo</p>
+        `;
+        elements.photoPreview.classList.remove('has-image');
+    }
+    
+    capturedPhotoData = null;
+}

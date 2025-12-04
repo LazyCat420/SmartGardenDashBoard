@@ -3,7 +3,7 @@ Smart Garden Dashboard - Main API Server
 Using Markdown files for Obsidian-compatible storage
 """
 
-from flask import Flask, request, jsonify, send_file, redirect
+from flask import Flask, request, jsonify, send_file, redirect, send_from_directory
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
 import json
@@ -629,6 +629,62 @@ def get_plant_label(plant_id):
     img_buffer.seek(0)
     
     return send_file(img_buffer, mimetype='image/png')
+
+
+# ============== Plant Image Upload ==============
+
+@app.route('/api/plant/<plant_id>/image', methods=['POST'])
+def upload_plant_image(plant_id):
+    """Upload an image for a plant"""
+    plant = get_plant(plant_id)
+    if not plant:
+        return jsonify({'error': 'Plant not found'}), 404
+    
+    data = request.json
+    image_data = data.get('image_data')
+    
+    if not image_data:
+        return jsonify({'error': 'No image data provided'}), 400
+    
+    try:
+        # Create images directory if it doesn't exist
+        images_dir = os.path.join(get_storage_path(), 'images')
+        os.makedirs(images_dir, exist_ok=True)
+        
+        # Decode base64 image
+        # Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+        
+        image_bytes = base64.b64decode(image_data)
+        
+        # Generate filename using plant ID and timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{plant_id}_{timestamp}.jpg"
+        filepath = os.path.join(images_dir, filename)
+        
+        # Save the image
+        with open(filepath, 'wb') as f:
+            f.write(image_bytes)
+        
+        # Update plant metadata with image URL
+        image_url = f"/images/{filename}"
+        update_plant(plant_id, {'image_url': image_url})
+        
+        return jsonify({
+            'message': 'Image uploaded successfully',
+            'image_url': image_url
+        }), 201
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to upload image: {str(e)}'}), 500
+
+
+@app.route('/images/<filename>')
+def serve_plant_image(filename):
+    """Serve plant images from the images directory"""
+    images_dir = os.path.join(get_storage_path(), 'images')
+    return send_from_directory(images_dir, filename)
 
 
 # ============== Growth Log Endpoints ==============

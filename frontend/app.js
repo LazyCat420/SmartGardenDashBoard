@@ -1,0 +1,1425 @@
+/**
+ * Smart Garden Dashboard - Frontend JavaScript
+ * Handles all UI interactions, API calls, and LLM integration
+ */
+
+// ============== Configuration ==============
+const API_BASE = 'http://localhost:5000/api';
+
+// ============== State ==============
+let plants = [];
+let tasks = [];
+let harvests = [];
+let notes = [];
+let weather = [];
+let healthChart = null;
+
+// ============== DOM Elements ==============
+const elements = {
+    // Navigation
+    navItems: document.querySelectorAll('.nav-item'),
+    pages: document.querySelectorAll('.page'),
+    pageTitle: document.getElementById('pageTitle'),
+    currentDate: document.getElementById('currentDate'),
+    
+    // LLM Status
+    llmStatusDot: document.getElementById('llmStatusDot'),
+    llmStatusText: document.getElementById('llmStatusText'),
+    
+    // Note Input
+    noteInput: document.getElementById('noteInput'),
+    processNoteBtn: document.getElementById('processNoteBtn'),
+    clearNoteBtn: document.getElementById('clearNoteBtn'),
+    extractedActions: document.getElementById('extractedActions'),
+    quickNoteBtn: document.getElementById('quickNoteBtn'),
+    
+    // Stats
+    statPlants: document.getElementById('statPlants'),
+    statTasks: document.getElementById('statTasks'),
+    statHarvests: document.getElementById('statHarvests'),
+    statPests: document.getElementById('statPests'),
+    
+    // Lists
+    upcomingTasks: document.getElementById('upcomingTasks'),
+    plantsList: document.getElementById('plantsList'),
+    tasksList: document.getElementById('tasksList'),
+    harvestsList: document.getElementById('harvestsList'),
+    notesList: document.getElementById('notesList'),
+    weatherList: document.getElementById('weatherList'),
+    
+    // Filters
+    plantStatusFilter: document.getElementById('plantStatusFilter'),
+    taskFilter: document.getElementById('taskFilter'),
+    
+    // Buttons
+    addPlantBtn: document.getElementById('addPlantBtn'),
+    addTaskBtn: document.getElementById('addTaskBtn'),
+    addWeatherBtn: document.getElementById('addWeatherBtn'),
+    
+    // Modal
+    modalOverlay: document.getElementById('modalOverlay'),
+    modal: document.getElementById('modal'),
+    modalTitle: document.getElementById('modalTitle'),
+    modalBody: document.getElementById('modalBody'),
+    modalClose: document.getElementById('modalClose'),
+    
+    // Toast
+    toastContainer: document.getElementById('toastContainer')
+};
+
+// ============== Initialization ==============
+document.addEventListener('DOMContentLoaded', () => {
+    initApp();
+});
+
+async function initApp() {
+    // Set current date
+    elements.currentDate.textContent = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    
+    // Setup event listeners
+    setupNavigation();
+    setupNoteInput();
+    setupFilters();
+    setupButtons();
+    setupModal();
+    
+    // Check LLM status
+    checkLLMStatus();
+    
+    // Load initial data
+    await loadDashboardData();
+    
+    // Handle QR code redirect - check URL params
+    handleQRCodeRedirect();
+}
+
+// ============== QR Code Redirect Handler ==============
+function handleQRCodeRedirect() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const plantId = urlParams.get('plant');
+    const action = urlParams.get('action');
+    const error = urlParams.get('error');
+    
+    // Show error if plant not found
+    if (error === 'plant_not_found') {
+        showToast('Plant not found - QR code may be invalid', 'error');
+        // Clear the URL params
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+    }
+    
+    // If we have a plant ID from QR scan, navigate to it
+    if (plantId) {
+        // Navigate to plants page
+        navigateTo('plants');
+        
+        // Wait for plants to load, then show the plant
+        setTimeout(() => {
+            const pid = parseInt(plantId);
+            if (action === 'view') {
+                viewPlant(pid);
+            } else if (action === 'water') {
+                logWatering(pid);
+            } else if (action === 'growth') {
+                logGrowth(pid);
+            } else {
+                // Default: show quick action modal
+                showPlantQuickActions(pid);
+            }
+            // Clear the URL params
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }, 500);
+    }
+}
+
+// Show quick actions modal for scanned plant
+function showPlantQuickActions(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) {
+        showToast('Plant not found', 'error');
+        return;
+    }
+    
+    const displayName = plant.display_name || plant.name;
+    
+    showModal(`🌱 ${displayName}`, `
+        <div class="quick-actions-container">
+            <p class="quick-actions-intro">What would you like to do with this plant?</p>
+            <div class="quick-actions-grid">
+                <button class="quick-action-btn" onclick="closeModal(); viewPlant(${plantId})">
+                    <span class="quick-action-icon">👁️</span>
+                    <span>View Details</span>
+                </button>
+                <button class="quick-action-btn" onclick="closeModal(); logWatering(${plantId})">
+                    <span class="quick-action-icon">💧</span>
+                    <span>Log Watering</span>
+                </button>
+                <button class="quick-action-btn" onclick="closeModal(); logGrowth(${plantId})">
+                    <span class="quick-action-icon">📏</span>
+                    <span>Log Growth</span>
+                </button>
+                <button class="quick-action-btn" onclick="closeModal(); showLabel(${plantId})">
+                    <span class="quick-action-icon">🏷️</span>
+                    <span>View Label</span>
+                </button>
+            </div>
+            <div class="plant-quick-info">
+                <p><strong>Code:</strong> ${plant.unique_code || 'N/A'}</p>
+                <p><strong>Location:</strong> ${plant.location || 'Not set'}</p>
+                <p><strong>Status:</strong> <span class="plant-status ${plant.status}">${plant.status}</span></p>
+            </div>
+        </div>
+    `);
+}
+
+// ============== Navigation ==============
+function setupNavigation() {
+    elements.navItems.forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const page = item.dataset.page;
+            navigateTo(page);
+        });
+    });
+}
+
+function navigateTo(page) {
+    // Update nav
+    elements.navItems.forEach(item => {
+        item.classList.toggle('active', item.dataset.page === page);
+    });
+    
+    // Update pages
+    elements.pages.forEach(p => {
+        p.classList.toggle('active', p.id === `${page}Page`);
+    });
+    
+    // Update title
+    const titles = {
+        dashboard: 'Dashboard',
+        plants: 'My Plants',
+        tasks: 'Tasks & Reminders',
+        harvests: 'Harvest Log',
+        notes: 'Garden Notes',
+        weather: 'Weather Log'
+    };
+    elements.pageTitle.textContent = titles[page] || page;
+    
+    // Load page data
+    loadPageData(page);
+}
+
+async function loadPageData(page) {
+    switch(page) {
+        case 'dashboard':
+            await loadDashboardData();
+            break;
+        case 'plants':
+            await loadPlants();
+            break;
+        case 'tasks':
+            await loadTasks();
+            break;
+        case 'harvests':
+            await loadHarvests();
+            break;
+        case 'notes':
+            await loadNotes();
+            break;
+        case 'weather':
+            await loadWeather();
+            break;
+    }
+}
+
+// ============== LLM Integration ==============
+async function checkLLMStatus() {
+    try {
+        const response = await fetch(`${API_BASE}/llm/status`);
+        const data = await response.json();
+        
+        elements.llmStatusDot.className = 'status-dot ' + (data.connected ? 'connected' : 'disconnected');
+        elements.llmStatusText.textContent = data.connected ? 'AI Connected' : 'AI Offline';
+    } catch (error) {
+        elements.llmStatusDot.className = 'status-dot disconnected';
+        elements.llmStatusText.textContent = 'AI Offline';
+    }
+}
+
+function setupNoteInput() {
+    elements.processNoteBtn.addEventListener('click', processNote);
+    elements.clearNoteBtn.addEventListener('click', () => {
+        elements.noteInput.value = '';
+        elements.extractedActions.classList.add('hidden');
+    });
+    elements.quickNoteBtn.addEventListener('click', () => {
+        navigateTo('dashboard');
+        elements.noteInput.focus();
+    });
+}
+
+async function processNote() {
+    const note = elements.noteInput.value.trim();
+    if (!note) {
+        showToast('Please enter a note first', 'error');
+        return;
+    }
+    
+    elements.processNoteBtn.disabled = true;
+    elements.processNoteBtn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Processing...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/llm/process-note`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ note })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.extracted_actions.length > 0) {
+            displayExtractedActions(data.extracted_actions);
+        } else if (data.error) {
+            showToast(data.error, 'error');
+            elements.extractedActions.classList.add('hidden');
+        } else {
+            showToast('No actions could be extracted from the note', 'error');
+            elements.extractedActions.classList.add('hidden');
+        }
+    } catch (error) {
+        showToast('Failed to process note. Is the server running?', 'error');
+    } finally {
+        elements.processNoteBtn.disabled = false;
+        elements.processNoteBtn.innerHTML = '<span class="btn-icon">✨</span> Process with AI';
+    }
+}
+
+function displayExtractedActions(actions) {
+    const actionIcons = {
+        add_plant: '🌱',
+        log_watering: '💧',
+        log_fertilization: '🧪',
+        log_harvest: '🥕',
+        log_growth: '📏',
+        report_pest_issue: '🐛',
+        create_task: '✅',
+        log_weather: '🌤️',
+        update_plant_status: '📝'
+    };
+    
+    const actionNames = {
+        add_plant: 'Add Plant',
+        log_watering: 'Log Watering',
+        log_fertilization: 'Log Fertilization',
+        log_harvest: 'Log Harvest',
+        log_growth: 'Log Growth',
+        report_pest_issue: 'Report Pest Issue',
+        create_task: 'Create Task',
+        log_weather: 'Log Weather',
+        update_plant_status: 'Update Plant Status'
+    };
+    
+    let html = `<h4>✨ Extracted Actions (${actions.length})</h4>`;
+    
+    actions.forEach((action, index) => {
+        const icon = actionIcons[action.action] || '📋';
+        const name = actionNames[action.action] || action.action;
+        const params = Object.entries(action.parameters || {})
+            .map(([k, v]) => `<strong>${k}:</strong> ${v}`)
+            .join(', ');
+        
+        html += `
+            <div class="action-item" data-index="${index}">
+                <div class="action-icon">${icon}</div>
+                <div class="action-details">
+                    <div class="action-type">${name}</div>
+                    <div class="action-params">${params || 'No parameters'}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `
+        <div class="action-buttons">
+            <button class="btn btn-secondary" onclick="cancelActions()">Cancel</button>
+            <button class="btn btn-primary" onclick="applyActions(${JSON.stringify(actions).replace(/"/g, '&quot;')})">
+                Apply All Actions
+            </button>
+        </div>
+    `;
+    
+    elements.extractedActions.innerHTML = html;
+    elements.extractedActions.classList.remove('hidden');
+}
+
+function cancelActions() {
+    elements.extractedActions.classList.add('hidden');
+}
+
+async function applyActions(actions) {
+    try {
+        const response = await fetch(`${API_BASE}/llm/apply-actions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ actions })
+        });
+        
+        const data = await response.json();
+        
+        const successCount = data.results.filter(r => r.success).length;
+        showToast(`Successfully applied ${successCount} of ${actions.length} actions`, 'success');
+        
+        // Clear and reload
+        elements.noteInput.value = '';
+        elements.extractedActions.classList.add('hidden');
+        await loadDashboardData();
+        
+    } catch (error) {
+        showToast('Failed to apply actions', 'error');
+    }
+}
+
+// ============== Dashboard ==============
+async function loadDashboardData() {
+    try {
+        // Load stats
+        const statsResponse = await fetch(`${API_BASE}/dashboard/stats`);
+        const stats = await statsResponse.json();
+        
+        elements.statPlants.textContent = stats.active_plants;
+        elements.statTasks.textContent = stats.pending_tasks;
+        elements.statHarvests.textContent = stats.recent_harvests;
+        elements.statPests.textContent = stats.active_pests;
+        
+        // Load upcoming tasks
+        const tasksResponse = await fetch(`${API_BASE}/tasks`);
+        tasks = await tasksResponse.json();
+        renderUpcomingTasks(tasks.slice(0, 5));
+        
+        // Load plants for health chart
+        const plantsResponse = await fetch(`${API_BASE}/plants`);
+        plants = await plantsResponse.json();
+        renderHealthChart();
+        
+    } catch (error) {
+        console.error('Failed to load dashboard data:', error);
+    }
+}
+
+function renderUpcomingTasks(taskList) {
+    if (!taskList.length) {
+        elements.upcomingTasks.innerHTML = `
+            <div class="empty-state">
+                <p>No pending tasks</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.upcomingTasks.innerHTML = taskList.map(task => {
+        const dueDate = task.due_date ? new Date(task.due_date) : null;
+        const isOverdue = dueDate && dueDate < new Date();
+        
+        return `
+            <div class="task-item">
+                <div class="task-checkbox" onclick="completeTask(${task.id})"></div>
+                <div class="task-content">
+                    <div class="task-title">${task.title}</div>
+                    <div class="task-due ${isOverdue ? 'overdue' : ''}">
+                        ${dueDate ? formatDate(dueDate) : 'No due date'}
+                    </div>
+                </div>
+                <span class="task-priority ${task.priority}">${task.priority}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderHealthChart() {
+    const ctx = document.getElementById('healthChart')?.getContext('2d');
+    if (!ctx) return;
+    
+    // Get plants with recent growth logs
+    const plantData = plants
+        .filter(p => p.status === 'active' && p.growth_logs?.length > 0)
+        .slice(0, 8)
+        .map(p => {
+            const latestLog = p.growth_logs[p.growth_logs.length - 1];
+            return {
+                name: p.name,
+                health: latestLog?.health_rating || 5
+            };
+        });
+    
+    if (healthChart) {
+        healthChart.destroy();
+    }
+    
+    if (!plantData.length) {
+        ctx.canvas.parentElement.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">📊</div>
+                <h3>No Health Data Yet</h3>
+                <p>Add plants and log their health to see the chart</p>
+            </div>
+        `;
+        return;
+    }
+    
+    healthChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: plantData.map(p => p.name),
+            datasets: [{
+                label: 'Health Rating',
+                data: plantData.map(p => p.health),
+                backgroundColor: plantData.map(p => 
+                    p.health >= 7 ? 'rgba(34, 197, 94, 0.5)' :
+                    p.health >= 4 ? 'rgba(245, 158, 11, 0.5)' :
+                    'rgba(239, 68, 68, 0.5)'
+                ),
+                borderColor: plantData.map(p =>
+                    p.health >= 7 ? '#22c55e' :
+                    p.health >= 4 ? '#f59e0b' :
+                    '#ef4444'
+                ),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 10,
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#94a3b8'
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        color: '#94a3b8'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                }
+            }
+        }
+    });
+}
+
+// ============== Plants ==============
+function setupFilters() {
+    elements.plantStatusFilter?.addEventListener('change', () => loadPlants());
+    elements.taskFilter?.addEventListener('change', () => loadTasks());
+}
+
+async function loadPlants() {
+    try {
+        const response = await fetch(`${API_BASE}/plants`);
+        plants = await response.json();
+        
+        const filter = elements.plantStatusFilter?.value || 'active';
+        let filteredPlants = plants;
+        
+        if (filter !== 'all') {
+            filteredPlants = plants.filter(p => p.status === filter);
+        }
+        
+        renderPlants(filteredPlants);
+    } catch (error) {
+        console.error('Failed to load plants:', error);
+    }
+}
+
+function renderPlants(plantList) {
+    if (!plantList.length) {
+        elements.plantsList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🌱</div>
+                <h3>No Plants Yet</h3>
+                <p>Add your first plant or use the AI note feature!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const plantEmojis = ['🌱', '🌿', '🌻', '🌷', '🌹', '🍅', '🥕', '🌶️', '🥬', '🍃'];
+    
+    elements.plantsList.innerHTML = plantList.map((plant, index) => {
+        const emoji = plantEmojis[index % plantEmojis.length];
+        const plantedDate = plant.date_planted ? formatDate(new Date(plant.date_planted)) : 'Unknown';
+        const displayName = plant.display_name || plant.name;
+        
+        return `
+            <div class="plant-card">
+                <div class="plant-image">${emoji}</div>
+                <div class="plant-info">
+                    <div class="plant-name">${displayName}</div>
+                    <div class="plant-variety">${plant.variety || 'No variety specified'}</div>
+                    <div class="plant-code">${plant.unique_code || ''}</div>
+                    <div class="plant-meta">
+                        <span class="plant-meta-item">📍 ${plant.location || 'Unknown'}</span>
+                        <span class="plant-meta-item">📅 ${plantedDate}</span>
+                    </div>
+                    <span class="plant-status ${plant.status}">${plant.status}</span>
+                    <div class="plant-actions">
+                        <button class="btn btn-small btn-secondary" onclick="viewPlant(${plant.id})">View</button>
+                        <button class="btn btn-small btn-secondary" onclick="showLabel(${plant.id})">🏷️ Label</button>
+                        <button class="btn btn-small btn-secondary" onclick="logGrowth(${plant.id})">📏 Growth</button>
+                        <button class="btn btn-small btn-secondary" onclick="logWatering(${plant.id})">💧 Water</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ============== Tasks ==============
+async function loadTasks() {
+    try {
+        const filter = elements.taskFilter?.value || 'pending';
+        const url = filter === 'completed' ? `${API_BASE}/tasks?completed=true` : `${API_BASE}/tasks`;
+        
+        const response = await fetch(url);
+        tasks = await response.json();
+        
+        let filteredTasks = tasks;
+        if (filter === 'completed') {
+            filteredTasks = tasks.filter(t => t.completed);
+        } else if (filter === 'pending') {
+            filteredTasks = tasks.filter(t => !t.completed);
+        }
+        
+        renderTasks(filteredTasks);
+    } catch (error) {
+        console.error('Failed to load tasks:', error);
+    }
+}
+
+function renderTasks(taskList) {
+    if (!taskList.length) {
+        elements.tasksList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">✅</div>
+                <h3>No Tasks</h3>
+                <p>Create a task or use the AI to extract tasks from notes!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.tasksList.innerHTML = taskList.map(task => {
+        const dueDate = task.due_date ? new Date(task.due_date) : null;
+        const isOverdue = dueDate && dueDate < new Date() && !task.completed;
+        
+        return `
+            <div class="task-item">
+                <div class="task-checkbox ${task.completed ? 'checked' : ''}" 
+                     onclick="completeTask(${task.id})"
+                     ${task.completed ? 'style="pointer-events:none"' : ''}></div>
+                <div class="task-content">
+                    <div class="task-title" style="${task.completed ? 'text-decoration: line-through; opacity: 0.6' : ''}">
+                        ${task.title}
+                    </div>
+                    <div class="task-due ${isOverdue ? 'overdue' : ''}">
+                        ${dueDate ? formatDate(dueDate) : 'No due date'}
+                        ${task.recurring ? '🔄 Recurring' : ''}
+                    </div>
+                </div>
+                <span class="task-priority ${task.priority}">${task.priority}</span>
+                <button class="btn btn-small btn-danger" onclick="deleteTask(${task.id})">🗑️</button>
+            </div>
+        `;
+    }).join('');
+}
+
+async function completeTask(taskId) {
+    try {
+        await fetch(`${API_BASE}/tasks/${taskId}/complete`, { method: 'PUT' });
+        showToast('Task completed!', 'success');
+        await loadTasks();
+        await loadDashboardData();
+    } catch (error) {
+        showToast('Failed to complete task', 'error');
+    }
+}
+
+async function deleteTask(taskId) {
+    if (!confirm('Delete this task?')) return;
+    
+    try {
+        await fetch(`${API_BASE}/tasks/${taskId}`, { method: 'DELETE' });
+        showToast('Task deleted', 'success');
+        await loadTasks();
+    } catch (error) {
+        showToast('Failed to delete task', 'error');
+    }
+}
+
+// ============== Harvests ==============
+async function loadHarvests() {
+    try {
+        const response = await fetch(`${API_BASE}/harvests`);
+        harvests = await response.json();
+        renderHarvests(harvests);
+    } catch (error) {
+        console.error('Failed to load harvests:', error);
+    }
+}
+
+function renderHarvests(harvestList) {
+    if (!harvestList.length) {
+        elements.harvestsList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🥕</div>
+                <h3>No Harvests Yet</h3>
+                <p>Log your harvests through the AI note feature!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.harvestsList.innerHTML = harvestList.map(harvest => `
+        <div class="harvest-item">
+            <div class="harvest-icon">🥕</div>
+            <div class="harvest-info">
+                <div class="harvest-plant">${harvest.plant_name || 'Unknown Plant'}</div>
+                <div class="harvest-date">${formatDate(new Date(harvest.date))}</div>
+            </div>
+            <div class="harvest-quantity">
+                <div class="harvest-amount">${harvest.quantity || '?'}</div>
+                <div class="harvest-unit">${harvest.unit || 'units'}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+// ============== Notes ==============
+async function loadNotes() {
+    try {
+        const response = await fetch(`${API_BASE}/notes`);
+        notes = await response.json();
+        renderNotes(notes);
+    } catch (error) {
+        console.error('Failed to load notes:', error);
+    }
+}
+
+function renderNotes(noteList) {
+    if (!noteList.length) {
+        elements.notesList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">📝</div>
+                <h3>No Notes Yet</h3>
+                <p>Use the Quick Note feature to add your first note!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    elements.notesList.innerHTML = noteList.map(note => {
+        const actions = note.extracted_data || [];
+        
+        return `
+            <div class="note-item">
+                <div class="note-header">
+                    <span class="note-date">${formatDate(new Date(note.created_at))}</span>
+                    <span class="note-badge ${note.processed ? 'processed' : 'pending'}">
+                        ${note.processed ? '✓ Processed' : 'Pending'}
+                    </span>
+                </div>
+                <div class="note-text">${note.raw_text}</div>
+                ${actions.length ? `
+                    <div class="note-actions-list">
+                        ${actions.map(a => `
+                            <span class="note-action-tag">${a.action}</span>
+                        `).join('')}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+// ============== Weather ==============
+async function loadWeather() {
+    try {
+        const response = await fetch(`${API_BASE}/weather`);
+        weather = await response.json();
+        renderWeather(weather);
+    } catch (error) {
+        console.error('Failed to load weather:', error);
+    }
+}
+
+function renderWeather(weatherList) {
+    if (!weatherList.length) {
+        elements.weatherList.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🌤️</div>
+                <h3>No Weather Logs</h3>
+                <p>Log weather conditions manually or through AI notes!</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const weatherIcons = {
+        sunny: '☀️',
+        cloudy: '☁️',
+        rainy: '🌧️',
+        stormy: '⛈️',
+        snowy: '❄️',
+        windy: '💨',
+        foggy: '🌫️'
+    };
+    
+    elements.weatherList.innerHTML = weatherList.map(w => {
+        const icon = weatherIcons[w.conditions?.toLowerCase()] || '🌤️';
+        
+        return `
+            <div class="weather-item">
+                <div class="weather-icon">${icon}</div>
+                <div class="weather-info">
+                    <div class="weather-date">${formatDate(new Date(w.date))}</div>
+                    <div class="weather-conditions">${w.conditions || 'Unknown conditions'}</div>
+                </div>
+                <div class="weather-temps">
+                    <div class="weather-temp high">
+                        <div class="weather-temp-value">${w.temperature_high || '--'}°</div>
+                        <div class="weather-temp-label">High</div>
+                    </div>
+                    <div class="weather-temp low">
+                        <div class="weather-temp-value">${w.temperature_low || '--'}°</div>
+                        <div class="weather-temp-label">Low</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// ============== Buttons ==============
+function setupButtons() {
+    elements.addPlantBtn?.addEventListener('click', showAddPlantModal);
+    elements.addTaskBtn?.addEventListener('click', showAddTaskModal);
+    elements.addWeatherBtn?.addEventListener('click', showAddWeatherModal);
+}
+
+// ============== Modal ==============
+function setupModal() {
+    elements.modalClose.addEventListener('click', closeModal);
+    elements.modalOverlay.addEventListener('click', (e) => {
+        if (e.target === elements.modalOverlay) closeModal();
+    });
+}
+
+function showModal(title, content) {
+    elements.modalTitle.textContent = title;
+    elements.modalBody.innerHTML = content;
+    elements.modalOverlay.classList.add('active');
+}
+
+function closeModal() {
+    elements.modalOverlay.classList.remove('active');
+}
+
+function showAddPlantModal() {
+    showModal('Add New Plant', `
+        <form id="addPlantForm">
+            <div class="form-row">
+                <div class="form-group" style="flex: 2;">
+                    <label>Plant Name *</label>
+                    <input type="text" name="name" required placeholder="e.g., Tomato">
+                </div>
+                <div class="form-group" style="flex: 1;">
+                    <label>Quantity</label>
+                    <input type="number" name="quantity" min="1" max="50" value="1" placeholder="1">
+                    <small style="color: var(--text-muted); font-size: 11px;">Creates #1, #2, etc.</small>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Variety</label>
+                    <input type="text" name="variety" placeholder="e.g., Cherry">
+                </div>
+                <div class="form-group">
+                    <label>Location</label>
+                    <input type="text" name="location" placeholder="e.g., Raised Bed 1">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Date Planted</label>
+                    <input type="date" name="date_planted">
+                </div>
+                <div class="form-group">
+                    <label>Expected Harvest</label>
+                    <input type="date" name="expected_harvest">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="3" placeholder="Any additional notes..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Plant(s)</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('addPlantForm').addEventListener('submit', handleAddPlant);
+}
+
+async function handleAddPlant(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // Convert quantity to integer
+    if (data.quantity) {
+        data.quantity = parseInt(data.quantity) || 1;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/plants`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await response.json();
+        
+        if (data.quantity > 1) {
+            showToast(`${result.plants?.length || data.quantity} plants added!`, 'success');
+        } else {
+            showToast('Plant added successfully!', 'success');
+        }
+        closeModal();
+        await loadPlants();
+        await loadDashboardData();
+    } catch (error) {
+        showToast('Failed to add plant', 'error');
+    }
+}
+
+function showAddTaskModal() {
+    showModal('Add New Task', `
+        <form id="addTaskForm">
+            <div class="form-group">
+                <label>Task Title *</label>
+                <input type="text" name="title" required placeholder="e.g., Water tomatoes">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Task Type</label>
+                    <select name="task_type">
+                        <option value="watering">Watering</option>
+                        <option value="fertilizing">Fertilizing</option>
+                        <option value="pruning">Pruning</option>
+                        <option value="harvesting">Harvesting</option>
+                        <option value="planting">Planting</option>
+                        <option value="pest_control">Pest Control</option>
+                        <option value="maintenance">Maintenance</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Due Date</label>
+                    <input type="date" name="due_date">
+                </div>
+                <div class="form-group">
+                    <label>Recurring?</label>
+                    <select name="recurring">
+                        <option value="false">No</option>
+                        <option value="true">Yes</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea name="description" rows="3" placeholder="Task details..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Task</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('addTaskForm').addEventListener('submit', handleAddTask);
+}
+
+async function handleAddTask(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    data.recurring = data.recurring === 'true';
+    
+    try {
+        await fetch(`${API_BASE}/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        showToast('Task created!', 'success');
+        closeModal();
+        await loadTasks();
+        await loadDashboardData();
+    } catch (error) {
+        showToast('Failed to create task', 'error');
+    }
+}
+
+function showAddWeatherModal() {
+    const today = new Date().toISOString().split('T')[0];
+    
+    showModal('Log Weather', `
+        <form id="addWeatherForm">
+            <div class="form-group">
+                <label>Date</label>
+                <input type="date" name="date" value="${today}">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>High Temperature (°C)</label>
+                    <input type="number" name="temperature_high" placeholder="e.g., 25">
+                </div>
+                <div class="form-group">
+                    <label>Low Temperature (°C)</label>
+                    <input type="number" name="temperature_low" placeholder="e.g., 15">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Conditions</label>
+                    <select name="conditions">
+                        <option value="sunny">☀️ Sunny</option>
+                        <option value="cloudy">☁️ Cloudy</option>
+                        <option value="rainy">🌧️ Rainy</option>
+                        <option value="stormy">⛈️ Stormy</option>
+                        <option value="windy">💨 Windy</option>
+                        <option value="foggy">🌫️ Foggy</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Rainfall (mm)</label>
+                    <input type="number" name="rainfall_mm" placeholder="e.g., 5">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Humidity (%)</label>
+                <input type="number" name="humidity" min="0" max="100" placeholder="e.g., 65">
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Any weather observations..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Weather</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('addWeatherForm').addEventListener('submit', handleAddWeather);
+}
+
+async function handleAddWeather(e) {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // Convert numeric fields
+    if (data.temperature_high) data.temperature_high = parseFloat(data.temperature_high);
+    if (data.temperature_low) data.temperature_low = parseFloat(data.temperature_low);
+    if (data.rainfall_mm) data.rainfall_mm = parseFloat(data.rainfall_mm);
+    if (data.humidity) data.humidity = parseFloat(data.humidity);
+    
+    try {
+        await fetch(`${API_BASE}/weather`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        showToast('Weather logged!', 'success');
+        closeModal();
+        await loadWeather();
+    } catch (error) {
+        showToast('Failed to log weather', 'error');
+    }
+}
+
+// ============== Plant Actions ==============
+function viewPlant(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    
+    const growthLogs = plant.growth_logs || [];
+    const latestGrowth = growthLogs[growthLogs.length - 1];
+    const displayName = plant.display_name || plant.name;
+    
+    showModal(`🌱 ${displayName}`, `
+        <div class="plant-details">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Variety</label>
+                    <p>${plant.variety || 'Not specified'}</p>
+                </div>
+                <div class="form-group">
+                    <label>Location</label>
+                    <p>${plant.location || 'Not specified'}</p>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Date Planted</label>
+                    <p>${plant.date_planted ? formatDate(new Date(plant.date_planted)) : 'Unknown'}</p>
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <p><span class="plant-status ${plant.status}">${plant.status}</span></p>
+                </div>
+            </div>
+            ${plant.unique_code ? `
+                <div class="form-group">
+                    <label>Plant Code</label>
+                    <p class="plant-code-large">${plant.unique_code}</p>
+                </div>
+            ` : ''}
+            ${latestGrowth ? `
+                <div class="form-group">
+                    <label>Latest Growth Log (${formatDate(new Date(latestGrowth.date))})</label>
+                    <p>Height: ${latestGrowth.height_cm || '?'} cm | Health: ${latestGrowth.health_rating || '?'}/10</p>
+                </div>
+            ` : ''}
+            <div class="form-group">
+                <label>Notes</label>
+                <p>${plant.notes || 'No notes'}</p>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="showLabel(${plant.id})">🏷️ Generate Label</button>
+                <button class="btn btn-danger" onclick="deletePlant(${plant.id})">Delete Plant</button>
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    `);
+}
+
+// Show plant label with QR code for printing
+async function showLabel(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    
+    const displayName = plant.display_name || plant.name;
+    
+    showModal(`🏷️ Label - ${displayName}`, `
+        <div class="label-preview-container">
+            <p class="label-instructions">Label designed for 12×40mm stickers (300 DPI)</p>
+            <div class="label-preview-wrapper">
+                <img id="labelPreview" class="label-preview" alt="Plant Label" src="" />
+                <div class="label-loading">Loading label...</div>
+            </div>
+            <div class="label-info">
+                <span><strong>Code:</strong> ${plant.unique_code || 'N/A'}</span>
+                <span><strong>Plant:</strong> ${displayName}</span>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" onclick="downloadLabel(${plantId})">📥 Download PNG</button>
+                <button class="btn btn-secondary" onclick="printLabel(${plantId})">🖨️ Print</button>
+                <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    `);
+    
+    // Load the label image
+    try {
+        const response = await fetch(`${API_BASE}/plants/${plantId}/label`);
+        if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+            const labelImg = document.getElementById('labelPreview');
+            labelImg.onload = () => {
+                labelImg.style.display = 'block';
+                document.querySelector('.label-loading').style.display = 'none';
+            };
+            labelImg.src = imageUrl;
+        } else {
+            document.querySelector('.label-loading').textContent = 'Failed to generate label';
+        }
+    } catch (error) {
+        console.error('Error loading label:', error);
+        document.querySelector('.label-loading').textContent = 'Error loading label';
+    }
+}
+
+// Download label as PNG
+async function downloadLabel(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    const displayName = plant ? (plant.display_name || plant.name) : 'plant';
+    const code = plant?.unique_code || plantId;
+    
+    try {
+        const response = await fetch(`${API_BASE}/plants/${plantId}/label`);
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `label_${code}_${displayName.replace(/[^a-z0-9]/gi, '_')}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('Label downloaded!', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to download label', 'error');
+    }
+}
+
+// Print label
+function printLabel(plantId) {
+    const labelImg = document.getElementById('labelPreview');
+    if (!labelImg || !labelImg.src) {
+        showToast('Label not loaded yet', 'error');
+        return;
+    }
+    
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Print Plant Label</title>
+            <style>
+                @page {
+                    size: 40mm 12mm;
+                    margin: 0;
+                }
+                body {
+                    margin: 0;
+                    padding: 0;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }
+                img {
+                    width: 40mm;
+                    height: 12mm;
+                    object-fit: contain;
+                }
+            </style>
+        </head>
+        <body>
+            <img src="${labelImg.src}" onload="window.print(); window.close();" />
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+}
+
+function logGrowth(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    
+    showModal(`📏 Log Growth - ${plant.name}`, `
+        <form id="logGrowthForm" data-plant-id="${plantId}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Height (cm)</label>
+                    <input type="number" name="height_cm" step="0.1" placeholder="e.g., 25.5">
+                </div>
+                <div class="form-group">
+                    <label>Width (cm)</label>
+                    <input type="number" name="width_cm" step="0.1" placeholder="e.g., 15">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Leaf Count</label>
+                    <input type="number" name="leaf_count" placeholder="e.g., 12">
+                </div>
+                <div class="form-group">
+                    <label>Health Rating (1-10)</label>
+                    <input type="number" name="health_rating" min="1" max="10" placeholder="e.g., 8">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Any observations..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Growth</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('logGrowthForm').addEventListener('submit', handleLogGrowth);
+}
+
+async function handleLogGrowth(e) {
+    e.preventDefault();
+    const form = e.target;
+    const plantId = form.dataset.plantId;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // Convert numeric fields
+    if (data.height_cm) data.height_cm = parseFloat(data.height_cm);
+    if (data.width_cm) data.width_cm = parseFloat(data.width_cm);
+    if (data.leaf_count) data.leaf_count = parseInt(data.leaf_count);
+    if (data.health_rating) data.health_rating = parseInt(data.health_rating);
+    
+    try {
+        await fetch(`${API_BASE}/plants/${plantId}/growth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        showToast('Growth logged!', 'success');
+        closeModal();
+        await loadPlants();
+        await loadDashboardData();
+    } catch (error) {
+        showToast('Failed to log growth', 'error');
+    }
+}
+
+function logWatering(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    
+    showModal(`💧 Log Watering - ${plant.name}`, `
+        <form id="logWateringForm" data-plant-id="${plantId}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Amount (ml)</label>
+                    <input type="number" name="amount_ml" placeholder="e.g., 500">
+                </div>
+                <div class="form-group">
+                    <label>Method</label>
+                    <select name="method">
+                        <option value="watering can">Watering Can</option>
+                        <option value="hose">Hose</option>
+                        <option value="drip">Drip Irrigation</option>
+                        <option value="spray">Spray</option>
+                        <option value="soak">Deep Soak</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Any notes..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Watering</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('logWateringForm').addEventListener('submit', handleLogWatering);
+}
+
+async function handleLogWatering(e) {
+    e.preventDefault();
+    const form = e.target;
+    const plantId = form.dataset.plantId;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    if (data.amount_ml) data.amount_ml = parseFloat(data.amount_ml);
+    
+    try {
+        await fetch(`${API_BASE}/plants/${plantId}/watering`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        showToast('Watering logged!', 'success');
+        closeModal();
+    } catch (error) {
+        showToast('Failed to log watering', 'error');
+    }
+}
+
+async function deletePlant(plantId) {
+    if (!confirm('Are you sure you want to delete this plant? This cannot be undone.')) return;
+    
+    try {
+        await fetch(`${API_BASE}/plants/${plantId}`, { method: 'DELETE' });
+        showToast('Plant deleted', 'success');
+        closeModal();
+        await loadPlants();
+        await loadDashboardData();
+    } catch (error) {
+        showToast('Failed to delete plant', 'error');
+    }
+}
+
+// ============== Utilities ==============
+function formatDate(date) {
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+    });
+}
+
+function showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${type === 'success' ? '✓' : '✕'}</span>
+        <span class="toast-message">${message}</span>
+    `;
+    
+    elements.toastContainer.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Make functions available globally for inline handlers
+window.applyActions = applyActions;
+window.cancelActions = cancelActions;
+window.completeTask = completeTask;
+window.deleteTask = deleteTask;
+window.viewPlant = viewPlant;
+window.logGrowth = logGrowth;
+window.logWatering = logWatering;
+window.deletePlant = deletePlant;
+window.closeModal = closeModal;

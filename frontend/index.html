@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌱 Smart Garden Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">🌱</span>
+                <span class="logo-text">Smart Garden</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" data-page="dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-page="plants">
+                    <span class="nav-icon">🌿</span>
+                    <span>Plants</span>
+                </a>
+                <a href="#" class="nav-item" data-page="tasks">
+                    <span class="nav-icon">✅</span>
+                    <span>Tasks</span>
+                </a>
+                <a href="#" class="nav-item" data-page="harvests">
+                    <span class="nav-icon">🥕</span>
+                    <span>Harvests</span>
+                </a>
+                <a href="#" class="nav-item" data-page="notes">
+                    <span class="nav-icon">📝</span>
+                    <span>Notes</span>
+                </a>
+                <a href="#" class="nav-item" data-page="weather">
+                    <span class="nav-icon">🌤️</span>
+                    <span>Weather</span>
+                </a>
+            </nav>
+            <div class="llm-status">
+                <span class="status-dot" id="llmStatusDot"></span>
+                <span id="llmStatusText">Checking LLM...</span>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-title">
+                    <h1 id="pageTitle">Dashboard</h1>
+                    <p class="date" id="currentDate"></p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" id="quickNoteBtn">
+                        <span>✨</span> Quick Note
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Page -->
+            <div class="page active" id="dashboardPage">
+                <!-- Stats Cards -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">🌿</div>
+                        <div class="stat-info">
+                            <h3 id="statPlants">0</h3>
+                            <p>Active Plants</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-info">
+                            <h3 id="statTasks">0</h3>
+                            <p>Pending Tasks</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🥕</div>
+                        <div class="stat-info">
+                            <h3 id="statHarvests">0</h3>
+                            <p>Recent Harvests</p>
+                        </div>
+                    </div>
+                    <div class="stat-card warning">
+                        <div class="stat-icon">🐛</div>
+                        <div class="stat-info">
+                            <h3 id="statPests">0</h3>
+                            <p>Active Issues</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Note Section -->
+                <div class="card note-input-card">
+                    <h2>📝 Quick Note</h2>
+                    <p class="card-subtitle">Just type naturally about your garden - the AI will extract the data!</p>
+                    <textarea id="noteInput" placeholder="Example: Today I planted 5 tomato seedlings in the raised bed. Watered all plants. The basil is about 15cm tall now and looking healthy. Need to add fertilizer to peppers next week."></textarea>
+                    <div class="note-actions">
+                        <button class="btn btn-secondary" id="clearNoteBtn">Clear</button>
+                        <button class="btn btn-primary" id="processNoteBtn">
+                            <span class="btn-icon">✨</span> Process with AI
+                        </button>
+                    </div>
+                    <div id="extractedActions" class="extracted-actions hidden"></div>
+                </div>
+
+                <!-- Recent Activity & Tasks -->
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h2>📋 Upcoming Tasks</h2>
+                        <div id="upcomingTasks" class="task-list"></div>
+                    </div>
+                    <div class="card">
+                        <h2>🌿 Plant Health Overview</h2>
+                        <canvas id="healthChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Plants Page -->
+            <div class="page" id="plantsPage">
+                <div class="page-header">
+                    <h2>Your Plants</h2>
+                    <button class="btn btn-primary" id="addPlantBtn">+ Add Plant</button>
+                </div>
+                <div class="filter-bar">
+                    <select id="plantStatusFilter">
+                        <option value="active">Active</option>
+                        <option value="all">All Plants</option>
+                        <option value="harvested">Harvested</option>
+                        <option value="removed">Removed</option>
+                    </select>
+                </div>
+                <div id="plantsList" class="plants-grid"></div>
+            </div>
+
+            <!-- Tasks Page -->
+            <div class="page" id="tasksPage">
+                <div class="page-header">
+                    <h2>Tasks & Reminders</h2>
+                    <button class="btn btn-primary" id="addTaskBtn">+ Add Task</button>
+                </div>
+                <div class="filter-bar">
+                    <select id="taskFilter">
+                        <option value="pending">Pending</option>
+                        <option value="all">All Tasks</option>
+                        <option value="completed">Completed</option>
+                    </select>
+                </div>
+                <div id="tasksList" class="tasks-list"></div>
+            </div>
+
+            <!-- Harvests Page -->
+            <div class="page" id="harvestsPage">
+                <div class="page-header">
+                    <h2>Harvest Log</h2>
+                </div>
+                <div id="harvestsList" class="harvests-list"></div>
+            </div>
+
+            <!-- Notes Page -->
+            <div class="page" id="notesPage">
+                <div class="page-header">
+                    <h2>Garden Notes History</h2>
+                </div>
+                <div id="notesList" class="notes-list"></div>
+            </div>
+
+            <!-- Weather Page -->
+            <div class="page" id="weatherPage">
+                <div class="page-header">
+                    <h2>Weather Log</h2>
+                    <button class="btn btn-primary" id="addWeatherBtn">+ Log Weather</button>
+                </div>
+                <div id="weatherList" class="weather-list"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">Modal Title</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

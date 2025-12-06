@@ -58,8 +58,6 @@ const elements = {
     llmSettingsClose: document.getElementById('llmSettingsClose'),
     llmUrlInput: document.getElementById('llmUrlInput'),
     llmModelInput: document.getElementById('llmModelInput'),
-    llmModelSelect: document.getElementById('llmModelSelect'),
-    refreshModelsBtn: document.getElementById('refreshModelsBtn'),
     settingsStatusDot: document.getElementById('settingsStatusDot'),
     settingsStatusText: document.getElementById('settingsStatusText'),
     statusDetails: document.getElementById('statusDetails'),
@@ -87,8 +85,9 @@ const elements = {
     // Lists
     upcomingTasks: document.getElementById('upcomingTasks'),
     plantsList: document.getElementById('plantsList'),
-    plantsListView: document.getElementById('plantsListView'),
-    plantsListBody: document.getElementById('plantsListBody'),
+    plantsTable: document.getElementById('plantsTable'),
+    plantsTableBody: document.getElementById('plantsTableBody'),
+    plantsCharts: document.getElementById('plantsCharts'),
     tasksList: document.getElementById('tasksList'),
     harvestsList: document.getElementById('harvestsList'),
     notesList: document.getElementById('notesList'),
@@ -406,17 +405,6 @@ function setupLLMSettings() {
     
     // View logs button
     elements.viewLogsBtn.addEventListener('click', toggleLogs);
-    
-    // Refresh models button
-    elements.refreshModelsBtn?.addEventListener('click', fetchAvailableModels);
-    
-    // Model select change - sync to input field
-    elements.llmModelSelect?.addEventListener('change', () => {
-        const selectedModel = elements.llmModelSelect.value;
-        if (selectedModel) {
-            elements.llmModelInput.value = selectedModel;
-        }
-    });
 }
 
 async function openLLMSettings() {
@@ -431,48 +419,12 @@ async function openLLMSettings() {
         elements.llmModelInput.value = data.model || '';
         elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.placeholder = data.defaults?.model || 'model-name';
-        
-        // Fetch available models
-        await fetchAvailableModels(data.model);
     } catch (error) {
         showToast('Failed to load settings', 'error');
     }
     
     // Check current status
     await testLLMConnection();
-}
-
-async function fetchAvailableModels(currentModel = null) {
-    if (!elements.llmModelSelect) return;
-    
-    elements.llmModelSelect.innerHTML = '<option value="">Loading models...</option>';
-    elements.refreshModelsBtn.disabled = true;
-    
-    try {
-        const response = await fetch(`${API_BASE}/llm/models`);
-        const data = await response.json();
-        
-        if (data.success && data.models && data.models.length > 0) {
-            const currentValue = currentModel || elements.llmModelInput.value || data.current;
-            
-            elements.llmModelSelect.innerHTML = '<option value="">-- Select a model --</option>' +
-                data.models.map(model => 
-                    `<option value="${model}" ${model === currentValue ? 'selected' : ''}>${model}</option>`
-                ).join('');
-            
-            showToast(`Found ${data.models.length} model(s)`, 'success');
-        } else {
-            elements.llmModelSelect.innerHTML = '<option value="">No models found</option>';
-            if (data.message) {
-                showToast(data.message, 'warning');
-            }
-        }
-    } catch (error) {
-        elements.llmModelSelect.innerHTML = '<option value="">Failed to load models</option>';
-        showToast('Could not fetch models from LMStudio', 'error');
-    } finally {
-        elements.refreshModelsBtn.disabled = false;
-    }
 }
 
 function closeLLMSettings() {
@@ -963,7 +915,7 @@ function setupFilters() {
     
     // Table sorting
     document.querySelectorAll('.data-table th[data-sort]')?.forEach(th => {
-        th.addEventListener('click', () => sortPlantsList(th.dataset.sort));
+        th.addEventListener('click', () => sortPlantsTable(th.dataset.sort));
         th.style.cursor = 'pointer';
     });
 }
@@ -978,10 +930,16 @@ function switchPlantsView(view) {
     
     // Show/hide containers
     elements.plantsList?.classList.toggle('hidden', view !== 'grid');
-    elements.plantsListView?.classList.toggle('hidden', view !== 'list');
+    elements.plantsTable?.classList.toggle('hidden', view !== 'table');
+    elements.plantsCharts?.classList.toggle('hidden', view !== 'charts');
     
     // Re-render for current view
     filterAndRenderPlants();
+    
+    // Initialize charts if needed
+    if (view === 'charts') {
+        renderPlantsCharts();
+    }
 }
 
 function filterAndRenderPlants() {
@@ -1006,12 +964,12 @@ function filterAndRenderPlants() {
     // Render based on current view
     if (currentPlantsView === 'grid') {
         renderPlants(filteredPlants);
-    } else if (currentPlantsView === 'list') {
-        renderPlantsList(filteredPlants);
+    } else if (currentPlantsView === 'table') {
+        renderPlantsTable(filteredPlants);
     }
 }
 
-function sortPlantsList(column) {
+function sortPlantsTable(column) {
     if (plantSortColumn === column) {
         plantSortDirection = plantSortDirection === 'asc' ? 'desc' : 'asc';
     } else {
@@ -1075,8 +1033,8 @@ function renderPlants(plantList) {
     }).join('');
 }
 
-function renderPlantsList(plantList) {
-    if (!elements.plantsListBody) return;
+function renderPlantsTable(plantList) {
+    if (!elements.plantsTableBody) return;
     
     // Sort the data
     const sortedPlants = [...plantList].sort((a, b) => {
@@ -1126,7 +1084,7 @@ function renderPlantsList(plantList) {
     });
     
     if (!sortedPlants.length) {
-        elements.plantsListBody.innerHTML = `
+        elements.plantsTableBody.innerHTML = `
             <tr>
                 <td colspan="9" class="empty-table-cell">
                     <div class="empty-state">
@@ -1139,7 +1097,7 @@ function renderPlantsList(plantList) {
         return;
     }
     
-    elements.plantsListBody.innerHTML = sortedPlants.map(plant => {
+    elements.plantsTableBody.innerHTML = sortedPlants.map(plant => {
         const displayName = plant.display_name || plant.name;
         const plantedDate = plant.date_planted ? formatDate(new Date(plant.date_planted)) : '-';
         const latestHeight = getLatestGrowthValue(plant, 'height_cm');

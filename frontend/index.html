@@ -176,10 +176,13 @@
                     <div class="header-actions-group">
                         <div class="view-toggle">
                             <button class="view-btn active" data-view="grid" title="Grid View">
-                                <span>🔲</span>
+                                <span>📊</span>
                             </button>
-                            <button class="view-btn" data-view="list" title="List View">
+                            <button class="view-btn" data-view="table" title="Table View">
                                 <span>📋</span>
+                            </button>
+                            <button class="view-btn" data-view="charts" title="Charts View">
+                                <span>📈</span>
                             </button>
                         </div>
                         <button class="btn btn-primary" id="addPlantBtn">+ Add Plant</button>
@@ -200,8 +203,8 @@
                 <!-- Grid View (default) -->
                 <div id="plantsList" class="plants-grid"></div>
                 
-                <!-- List View -->
-                <div id="plantsListView" class="plants-table-container hidden">
+                <!-- Table View -->
+                <div id="plantsTable" class="plants-table-container hidden">
                     <table class="data-table">
                         <thead>
                             <tr>
@@ -216,8 +219,30 @@
                                 <th>Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="plantsListBody"></tbody>
+                        <tbody id="plantsTableBody"></tbody>
                     </table>
+                </div>
+                
+                <!-- Charts View -->
+                <div id="plantsCharts" class="plants-charts-container hidden">
+                    <div class="charts-grid">
+                        <div class="card chart-card">
+                            <h3>📊 Health Distribution</h3>
+                            <canvas id="healthDistributionChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>🌱 Growth Comparison</h3>
+                            <canvas id="growthComparisonChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>💧 Watering Frequency</h3>
+                            <canvas id="wateringFrequencyChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>📍 Plants by Location</h3>
+                            <canvas id="locationDistributionChart"></canvas>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -506,19 +531,9 @@
                         <small class="form-hint">Default: http://localhost:1234/v1/chat/completions</small>
                     </div>
                     <div class="form-group">
-                        <label for="llmModelSelect">Model</label>
-                        <div class="model-select-wrapper">
-                            <select id="llmModelSelect" class="form-select">
-                                <option value="">-- Select a model --</option>
-                            </select>
-                            <button type="button" class="btn btn-sm btn-secondary" id="refreshModelsBtn" title="Refresh model list">🔄</button>
-                        </div>
-                        <small class="form-hint">Select from available models in LMStudio, or enter manually below</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="llmModelInput">Model Name (Manual Entry)</label>
+                        <label for="llmModelInput">Model Name</label>
                         <input type="text" id="llmModelInput" placeholder="ibm-granite/granite-3.3-8b-instruct">
-                        <small class="form-hint">Use this if your model doesn't appear in the dropdown</small>
+                        <small class="form-hint">Enter the model name as shown in LMStudio</small>
                     </div>
                 </div>
                 

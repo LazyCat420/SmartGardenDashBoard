@@ -1629,21 +1629,6 @@ body {
     border-color: var(--primary);
 }
 
-.model-select-wrapper {
-    display: flex;
-    gap: 8px;
-    align-items: stretch;
-}
-
-.model-select-wrapper select {
-    flex: 1;
-}
-
-.model-select-wrapper .btn {
-    padding: 8px 12px;
-    white-space: nowrap;
-}
-
 .form-row {
     display: grid;
     grid-template-columns: repeat(2, 1fr);

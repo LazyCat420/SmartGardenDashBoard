@@ -28,6 +28,8 @@ let capturedPhotoData = null;
 
 // Plants view state
 let currentPlantsView = 'grid';
+// Toggle state for views: allows multiple views to be visible and stacked
+let viewVisibility = { grid: true, table: false, charts: false };
 let plantSearchQuery = '';
 let plantSortColumn = 'name';
 let plantSortDirection = 'asc';
@@ -171,9 +173,12 @@ const elements = {
 };
 
 // ============== Initialization ==============
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => initApp());
+} else {
+    // If script loaded after DOMContentLoaded, call init immediately
     initApp();
-});
+}
 
 async function initApp() {
     // Set current date
@@ -902,10 +907,37 @@ function setupFilters() {
     elements.plantStatusFilter?.addEventListener('change', () => loadPlants());
     elements.taskFilter?.addEventListener('change', () => loadTasks());
     
-    // Plants view toggle
-    elements.viewToggleBtns?.forEach(btn => {
-        btn.addEventListener('click', () => switchPlantsView(btn.dataset.view));
+    // Plants view toggle - query fresh to ensure buttons are found
+    const viewBtns = document.querySelectorAll('.view-btn');
+    console.debug('[setupFilters] found view buttons:', viewBtns.length);
+    // Initialize button active state based on viewVisibility
+    viewBtns.forEach(btn => {
+        const v = btn.dataset.view;
+        btn.classList.toggle('active', !!viewVisibility[v]);
     });
+    // Attach per-button listeners
+    viewBtns.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // prevent delegated handler from also firing
+            const view = btn.dataset.view;
+            // button clicked; toggling handled by switchPlantsView
+            if (view) switchPlantsView(view);
+        });
+    });
+    // Fallback: delegated listener on the container to handle cases where the
+    // individual listeners aren't attached or DOM nodes are recreated.
+    const viewToggleContainer = document.querySelector('.view-toggle');
+    if (viewToggleContainer) {
+        viewToggleContainer.addEventListener('click', (e) => {
+            const btn = (e.target instanceof Element) ? e.target.closest('.view-btn') : null;
+            if (btn) {
+                e.preventDefault();
+                const view = btn.dataset.view;
+                if (view) switchPlantsView(view);
+            }
+        });
+    }
     
     // Plants search
     elements.plantSearchInput?.addEventListener('input', (e) => {
@@ -921,26 +953,41 @@ function setupFilters() {
 }
 
 function switchPlantsView(view) {
-    currentPlantsView = view;
+    // Toggle visibility for the requested view
+    viewVisibility[view] = !viewVisibility[view];
+    currentPlantsView = view; // keep last used view for compatibility
+    console.debug('[switchPlantsView] switching to view:', view);
     
-    // Update button states
-    elements.viewToggleBtns?.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === view);
+    // Update button states - query fresh
+    const viewBtns = document.querySelectorAll('.view-btn');
+    viewBtns.forEach(btn => {
+        const v = btn.dataset.view;
+        btn.classList.toggle('active', !!viewVisibility[v]);
     });
     
     // Show/hide containers
-    elements.plantsList?.classList.toggle('hidden', view !== 'grid');
-    elements.plantsTable?.classList.toggle('hidden', view !== 'table');
-    elements.plantsCharts?.classList.toggle('hidden', view !== 'charts');
+    elements.plantsList?.classList.toggle('hidden', !viewVisibility.grid);
+    elements.plantsTable?.classList.toggle('hidden', !viewVisibility.table);
+    elements.plantsCharts?.classList.toggle('hidden', !viewVisibility.charts);
+    console.debug('[switchPlantsView] containers hidden state:', {
+        listHidden: elements.plantsList?.classList.contains('hidden'),
+        tableHidden: elements.plantsTable?.classList.contains('hidden'),
+        chartsHidden: elements.plantsCharts?.classList.contains('hidden'),
+    });
     
     // Re-render for current view
+    // Re-render for all visible views
     filterAndRenderPlants();
     
     // Initialize charts if needed
     if (view === 'charts') {
-        renderPlantsCharts();
+        if (viewVisibility.charts) {
+            renderPlantsCharts();
+        }
     }
 }
+// Ensure global reference is available for inline onclick and other global invocations
+if (typeof window !== 'undefined') window.switchPlantsView = switchPlantsView;
 
 function filterAndRenderPlants() {
     const filter = elements.plantStatusFilter?.value || 'active';
@@ -961,11 +1008,20 @@ function filterAndRenderPlants() {
         );
     }
     
-    // Render based on current view
-    if (currentPlantsView === 'grid') {
+    // Render based on viewVisibility so multiple views can be stacked
+    if (viewVisibility.grid) {
         renderPlants(filteredPlants);
-    } else if (currentPlantsView === 'table') {
+    } else {
+        // If grid hidden, clear contents to avoid stale data left in DOM
+        if (elements.plantsList) elements.plantsList.innerHTML = '';
+    }
+    if (viewVisibility.table) {
         renderPlantsTable(filteredPlants);
+    } else {
+        if (elements.plantsTableBody) elements.plantsTableBody.innerHTML = '';
+    }
+    if (viewVisibility.charts) {
+        renderPlantsCharts();
     }
 }
 
@@ -1198,7 +1254,20 @@ function renderHealthDistributionChart(plantList) {
         options: {
             responsive: true,
             plugins: {
-                legend: { position: 'bottom' }
+                legend: { 
+                    position: 'bottom',
+                    onClick: (e, legendItem, legend) => {
+                        const index = legendItem.index;
+                        const chart = legend.chart;
+                        const meta = chart.getDatasetMeta(0);
+                        
+                        // Toggle the hidden state
+                        if (meta.data[index]) {
+                            meta.data[index].hidden = !meta.data[index].hidden;
+                        }
+                        chart.update();
+                    }
+                }
             }
         }
     });
@@ -1228,6 +1297,10 @@ function renderGrowthComparisonChart(plantList) {
     
     const labels = plantsWithGrowth.map(p => p.display_name || p.name);
     const heights = plantsWithGrowth.map(p => getLatestGrowthValue(p, 'height_cm') || 0);
+    const bgColors = plantsWithGrowth.map(() => '#3b82f6');
+    
+    // Track hidden bars
+    const hiddenBars = new Array(plantsWithGrowth.length).fill(false);
     
     growthComparisonChart = new Chart(ctx, {
         type: 'bar',
@@ -1236,7 +1309,7 @@ function renderGrowthComparisonChart(plantList) {
             datasets: [{
                 label: 'Height (cm)',
                 data: heights,
-                backgroundColor: '#3b82f6'
+                backgroundColor: bgColors
             }]
         },
         options: {
@@ -1246,6 +1319,24 @@ function renderGrowthComparisonChart(plantList) {
             },
             scales: {
                 y: { beginAtZero: true, title: { display: true, text: 'Height (cm)' } }
+            },
+            onClick: (e, elements) => {
+                if (elements.length > 0) {
+                    const index = elements[0].index;
+                    const chart = growthComparisonChart;
+                    const meta = chart.getDatasetMeta(0);
+                    
+                    // Toggle visibility
+                    hiddenBars[index] = !hiddenBars[index];
+                    meta.data[index].hidden = hiddenBars[index];
+                    
+                    // Update bar appearance (make transparent when hidden)
+                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) => 
+                        hiddenBars[i] ? 'rgba(59, 130, 246, 0.2)' : color
+                    );
+                    
+                    chart.update();
+                }
             }
         }
     });
@@ -1275,6 +1366,10 @@ function renderWateringFrequencyChart(plantList) {
     
     const labels = plantsWithWatering.map(p => p.display_name || p.name);
     const counts = plantsWithWatering.map(p => (p.waterings || []).length);
+    const bgColors = plantsWithWatering.map(() => '#06b6d4');
+    
+    // Track hidden bars
+    const hiddenBars = new Array(plantsWithWatering.length).fill(false);
     
     wateringFrequencyChart = new Chart(ctx, {
         type: 'bar',
@@ -1283,7 +1378,7 @@ function renderWateringFrequencyChart(plantList) {
             datasets: [{
                 label: 'Watering Events',
                 data: counts,
-                backgroundColor: '#06b6d4'
+                backgroundColor: bgColors
             }]
         },
         options: {
@@ -1293,6 +1388,24 @@ function renderWateringFrequencyChart(plantList) {
             },
             scales: {
                 y: { beginAtZero: true, title: { display: true, text: 'Count' } }
+            },
+            onClick: (e, elements) => {
+                if (elements.length > 0) {
+                    const index = elements[0].index;
+                    const chart = wateringFrequencyChart;
+                    const meta = chart.getDatasetMeta(0);
+                    
+                    // Toggle visibility
+                    hiddenBars[index] = !hiddenBars[index];
+                    meta.data[index].hidden = hiddenBars[index];
+                    
+                    // Update bar appearance (make transparent when hidden)
+                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) => 
+                        hiddenBars[i] ? 'rgba(6, 182, 212, 0.2)' : color
+                    );
+                    
+                    chart.update();
+                }
             }
         }
     });
@@ -1325,7 +1438,20 @@ function renderLocationDistributionChart(plantList) {
         options: {
             responsive: true,
             plugins: {
-                legend: { position: 'bottom' }
+                legend: { 
+                    position: 'bottom',
+                    onClick: (e, legendItem, legend) => {
+                        const index = legendItem.index;
+                        const chart = legend.chart;
+                        const meta = chart.getDatasetMeta(0);
+                        
+                        // Toggle the hidden state
+                        if (meta.data[index]) {
+                            meta.data[index].hidden = !meta.data[index].hidden;
+                        }
+                        chart.update();
+                    }
+                }
             }
         }
     });

@@ -26,6 +26,22 @@ let html5QrCode = null;
 let scannedPlant = null;
 let capturedPhotoData = null;
 
+// Plants view state
+let currentPlantsView = 'grid';
+let plantSearchQuery = '';
+let plantSortColumn = 'name';
+let plantSortDirection = 'asc';
+
+// Plants charts
+let healthDistributionChart = null;
+let growthComparisonChart = null;
+let wateringFrequencyChart = null;
+let locationDistributionChart = null;
+
+// Leaderboard state
+let leaderboardChart = null;
+let selectedLeaderboardPlants = new Set(); // Empty = all plants
+
 // ============== DOM Elements ==============
 const elements = {
     // Navigation
@@ -37,6 +53,21 @@ const elements = {
     // LLM Status
     llmStatusDot: document.getElementById('llmStatusDot'),
     llmStatusText: document.getElementById('llmStatusText'),
+    llmSettingsBtn: document.getElementById('llmSettingsBtn'),
+    llmSettingsOverlay: document.getElementById('llmSettingsOverlay'),
+    llmSettingsClose: document.getElementById('llmSettingsClose'),
+    llmUrlInput: document.getElementById('llmUrlInput'),
+    llmModelInput: document.getElementById('llmModelInput'),
+    settingsStatusDot: document.getElementById('settingsStatusDot'),
+    settingsStatusText: document.getElementById('settingsStatusText'),
+    statusDetails: document.getElementById('statusDetails'),
+    testConnectionBtn: document.getElementById('testConnectionBtn'),
+    testToolsBtn: document.getElementById('testToolsBtn'),
+    saveSettingsBtn: document.getElementById('saveSettingsBtn'),
+    resetSettingsBtn: document.getElementById('resetSettingsBtn'),
+    viewLogsBtn: document.getElementById('viewLogsBtn'),
+    logsContainer: document.getElementById('logsContainer'),
+    logsContent: document.getElementById('logsContent'),
     
     // Note Input
     noteInput: document.getElementById('noteInput'),
@@ -54,12 +85,30 @@ const elements = {
     // Lists
     upcomingTasks: document.getElementById('upcomingTasks'),
     plantsList: document.getElementById('plantsList'),
+    plantsTable: document.getElementById('plantsTable'),
+    plantsTableBody: document.getElementById('plantsTableBody'),
+    plantsCharts: document.getElementById('plantsCharts'),
     tasksList: document.getElementById('tasksList'),
     harvestsList: document.getElementById('harvestsList'),
     notesList: document.getElementById('notesList'),
     weatherList: document.getElementById('weatherList'),
+    weatherSearchInput: document.getElementById('weatherSearchInput'),
+    fetchWeatherBtn: document.getElementById('fetchWeatherBtn'),
+    weatherSearchResult: document.getElementById('weatherSearchResult'),
+    
+    // Leaderboard
+    leaderboardMetric: document.getElementById('leaderboardMetric'),
+    leaderboardCategory: document.getElementById('leaderboardCategory'),
+    selectPlantsBtn: document.getElementById('selectPlantsBtn'),
+    selectedPlantsCount: document.getElementById('selectedPlantsCount'),
+    leaderboardChartTitle: document.getElementById('leaderboardChartTitle'),
+    leaderboardRankings: document.getElementById('leaderboardRankings'),
     recipesList: document.getElementById('recipesList'),
     productsList: document.getElementById('productsList'),
+    
+    // Plants View Controls
+    viewToggleBtns: document.querySelectorAll('.view-btn'),
+    plantSearchInput: document.getElementById('plantSearchInput'),
     
     // Budget Summary
     totalSpent: document.getElementById('totalSpent'),
@@ -143,6 +192,9 @@ async function initApp() {
     setupModal();
     setupMobileMenu();
     setupScanner();
+    setupLLMSettings();
+    setupWeatherSearch();
+    setupLeaderboard();
     
     // Check LLM status
     checkLLMStatus();
@@ -265,7 +317,8 @@ function navigateTo(page) {
         harvests: 'Harvest Log',
         notes: 'Garden Notes',
         weather: 'Weather Log',
-        scanner: 'Plant Scanner'
+        scanner: 'Plant Scanner',
+        leaderboard: 'Leaderboard'
     };
     elements.pageTitle.textContent = titles[page] || page;
     
@@ -302,6 +355,9 @@ async function loadPageData(page) {
         case 'scanner':
             initScannerPage();
             break;
+        case 'leaderboard':
+            await loadLeaderboard();
+            break;
     }
 }
 
@@ -316,6 +372,221 @@ async function checkLLMStatus() {
     } catch (error) {
         elements.llmStatusDot.className = 'status-dot disconnected';
         elements.llmStatusText.textContent = 'AI Offline';
+    }
+}
+
+// ============== LLM Settings ==============
+function setupLLMSettings() {
+    // Open settings modal
+    elements.llmSettingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openLLMSettings();
+    });
+    
+    // Close settings modal
+    elements.llmSettingsClose.addEventListener('click', closeLLMSettings);
+    elements.llmSettingsOverlay.addEventListener('click', (e) => {
+        if (e.target === elements.llmSettingsOverlay) {
+            closeLLMSettings();
+        }
+    });
+    
+    // Test connection button
+    elements.testConnectionBtn.addEventListener('click', testLLMConnection);
+    
+    // Test tool calling button
+    elements.testToolsBtn.addEventListener('click', testToolCalling);
+    
+    // Save settings button
+    elements.saveSettingsBtn.addEventListener('click', saveLLMSettings);
+    
+    // Reset settings button
+    elements.resetSettingsBtn.addEventListener('click', resetLLMSettings);
+    
+    // View logs button
+    elements.viewLogsBtn.addEventListener('click', toggleLogs);
+}
+
+async function openLLMSettings() {
+    elements.llmSettingsOverlay.classList.add('active');
+    
+    // Load current settings
+    try {
+        const response = await fetch(`${API_BASE}/llm/settings`);
+        const data = await response.json();
+        
+        elements.llmUrlInput.value = data.url || '';
+        elements.llmModelInput.value = data.model || '';
+        elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
+        elements.llmModelInput.placeholder = data.defaults?.model || 'model-name';
+    } catch (error) {
+        showToast('Failed to load settings', 'error');
+    }
+    
+    // Check current status
+    await testLLMConnection();
+}
+
+function closeLLMSettings() {
+    elements.llmSettingsOverlay.classList.remove('active');
+    elements.logsContainer.classList.add('hidden');
+}
+
+async function testLLMConnection() {
+    elements.testConnectionBtn.disabled = true;
+    elements.testConnectionBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Testing...';
+    elements.settingsStatusText.textContent = 'Testing connection...';
+    elements.settingsStatusDot.className = 'status-dot large';
+    elements.statusDetails.innerHTML = '';
+    
+    try {
+        const response = await fetch(`${API_BASE}/llm/status`);
+        const data = await response.json();
+        
+        elements.settingsStatusDot.className = 'status-dot large ' + (data.connected ? 'connected' : 'disconnected');
+        elements.settingsStatusText.textContent = data.connected ? '✅ Connected' : '❌ Not Connected';
+        
+        // Show details
+        let details = `<div class="detail-item"><strong>URL:</strong> ${data.url || 'N/A'}</div>`;
+        details += `<div class="detail-item"><strong>Model:</strong> ${data.model || 'N/A'}</div>`;
+        
+        if (data.connected) {
+            details += `<div class="detail-item success"><strong>Status:</strong> ${data.message}</div>`;
+            if (data.model_response) {
+                details += `<div class="detail-item"><strong>Response:</strong> "${data.model_response}"</div>`;
+            }
+        } else {
+            details += `<div class="detail-item error"><strong>Error:</strong> ${data.message}</div>`;
+            if (data.error_details) {
+                details += `<div class="detail-item error"><strong>Details:</strong> ${data.error_details.substring(0, 200)}</div>`;
+            }
+        }
+        
+        elements.statusDetails.innerHTML = details;
+        
+        // Update sidebar status
+        elements.llmStatusDot.className = 'status-dot ' + (data.connected ? 'connected' : 'disconnected');
+        elements.llmStatusText.textContent = data.connected ? 'AI Connected' : 'AI Offline';
+        
+    } catch (error) {
+        elements.settingsStatusDot.className = 'status-dot large disconnected';
+        elements.settingsStatusText.textContent = '❌ Connection Failed';
+        elements.statusDetails.innerHTML = `<div class="detail-item error"><strong>Error:</strong> ${error.message}</div>`;
+    } finally {
+        elements.testConnectionBtn.disabled = false;
+        elements.testConnectionBtn.innerHTML = '🔌 Test Connection';
+    }
+}
+
+async function testToolCalling() {
+    elements.testToolsBtn.disabled = true;
+    elements.testToolsBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Testing...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/llm/test-tools`);
+        const data = await response.json();
+        
+        let details = elements.statusDetails.innerHTML;
+        details += '<hr style="margin: 10px 0; border-color: var(--border-color);">';
+        details += '<div class="detail-item"><strong>Tool Calling Test:</strong></div>';
+        
+        if (data.supports_tools) {
+            details += `<div class="detail-item success">✅ ${data.message}</div>`;
+        } else {
+            details += `<div class="detail-item error">❌ ${data.message}</div>`;
+            if (data.hint) {
+                details += `<div class="detail-item warning">💡 ${data.hint}</div>`;
+            }
+            if (data.model_response) {
+                details += `<div class="detail-item"><strong>Model said:</strong> "${data.model_response}"</div>`;
+            }
+        }
+        
+        elements.statusDetails.innerHTML = details;
+        
+    } catch (error) {
+        showToast('Failed to test tool calling', 'error');
+    } finally {
+        elements.testToolsBtn.disabled = false;
+        elements.testToolsBtn.innerHTML = '🔧 Test Tool Calling';
+    }
+}
+
+async function saveLLMSettings() {
+    const url = elements.llmUrlInput.value.trim();
+    const model = elements.llmModelInput.value.trim();
+    
+    if (!url) {
+        showToast('Please enter an API URL', 'error');
+        return;
+    }
+    
+    elements.saveSettingsBtn.disabled = true;
+    elements.saveSettingsBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Saving...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/llm/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, model })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Settings saved successfully!', 'success');
+            // Test connection with new settings
+            await testLLMConnection();
+        } else {
+            showToast(data.message || 'Failed to save settings', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save settings', 'error');
+    } finally {
+        elements.saveSettingsBtn.disabled = false;
+        elements.saveSettingsBtn.innerHTML = '💾 Save Settings';
+    }
+}
+
+async function resetLLMSettings() {
+    try {
+        const response = await fetch(`${API_BASE}/llm/settings`);
+        const data = await response.json();
+        
+        elements.llmUrlInput.value = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
+        elements.llmModelInput.value = data.defaults?.model || 'ibm-granite/granite-3.3-8b-instruct';
+        
+        showToast('Settings reset to defaults (not saved yet)', 'info');
+    } catch (error) {
+        showToast('Failed to load default settings', 'error');
+    }
+}
+
+async function toggleLogs() {
+    const container = elements.logsContainer;
+    
+    if (container.classList.contains('hidden')) {
+        container.classList.remove('hidden');
+        elements.viewLogsBtn.innerHTML = '📋 Hide Logs';
+        
+        // Load logs
+        try {
+            const response = await fetch(`${API_BASE}/llm/logs`);
+            const data = await response.json();
+            
+            if (data.logs && data.logs.length > 0) {
+                elements.logsContent.textContent = data.logs.join('');
+                // Scroll to bottom
+                elements.logsContent.scrollTop = elements.logsContent.scrollHeight;
+            } else {
+                elements.logsContent.textContent = 'No logs available yet. Try processing a note to generate logs.';
+            }
+        } catch (error) {
+            elements.logsContent.textContent = 'Failed to load logs: ' + error.message;
+        }
+    } else {
+        container.classList.add('hidden');
+        elements.viewLogsBtn.innerHTML = '📋 View Recent Logs';
     }
 }
 
@@ -350,10 +621,16 @@ async function processNote() {
         
         const data = await response.json();
         
-        if (data.success && data.extracted_actions.length > 0) {
+        if (data.success && data.extracted_actions && data.extracted_actions.length > 0) {
             displayExtractedActions(data.extracted_actions);
         } else if (data.error) {
-            showToast(data.error, 'error');
+            // Show more detailed error with hint if available
+            let errorMsg = data.error;
+            if (data.hint) {
+                errorMsg += ` (${data.hint})`;
+            }
+            showToast(errorMsg, 'error');
+            console.error('LLM Error:', data);
             elements.extractedActions.classList.add('hidden');
         } else {
             showToast('No actions could be extracted from the note', 'error');
@@ -624,6 +901,82 @@ function renderHealthChart() {
 function setupFilters() {
     elements.plantStatusFilter?.addEventListener('change', () => loadPlants());
     elements.taskFilter?.addEventListener('change', () => loadTasks());
+    
+    // Plants view toggle
+    elements.viewToggleBtns?.forEach(btn => {
+        btn.addEventListener('click', () => switchPlantsView(btn.dataset.view));
+    });
+    
+    // Plants search
+    elements.plantSearchInput?.addEventListener('input', (e) => {
+        plantSearchQuery = e.target.value.toLowerCase();
+        filterAndRenderPlants();
+    });
+    
+    // Table sorting
+    document.querySelectorAll('.data-table th[data-sort]')?.forEach(th => {
+        th.addEventListener('click', () => sortPlantsTable(th.dataset.sort));
+        th.style.cursor = 'pointer';
+    });
+}
+
+function switchPlantsView(view) {
+    currentPlantsView = view;
+    
+    // Update button states
+    elements.viewToggleBtns?.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === view);
+    });
+    
+    // Show/hide containers
+    elements.plantsList?.classList.toggle('hidden', view !== 'grid');
+    elements.plantsTable?.classList.toggle('hidden', view !== 'table');
+    elements.plantsCharts?.classList.toggle('hidden', view !== 'charts');
+    
+    // Re-render for current view
+    filterAndRenderPlants();
+    
+    // Initialize charts if needed
+    if (view === 'charts') {
+        renderPlantsCharts();
+    }
+}
+
+function filterAndRenderPlants() {
+    const filter = elements.plantStatusFilter?.value || 'active';
+    let filteredPlants = plants;
+    
+    // Filter by status
+    if (filter !== 'all') {
+        filteredPlants = filteredPlants.filter(p => p.status === filter);
+    }
+    
+    // Filter by search query
+    if (plantSearchQuery) {
+        filteredPlants = filteredPlants.filter(p => 
+            (p.name || '').toLowerCase().includes(plantSearchQuery) ||
+            (p.variety || '').toLowerCase().includes(plantSearchQuery) ||
+            (p.location || '').toLowerCase().includes(plantSearchQuery) ||
+            (p.unique_code || '').toLowerCase().includes(plantSearchQuery)
+        );
+    }
+    
+    // Render based on current view
+    if (currentPlantsView === 'grid') {
+        renderPlants(filteredPlants);
+    } else if (currentPlantsView === 'table') {
+        renderPlantsTable(filteredPlants);
+    }
+}
+
+function sortPlantsTable(column) {
+    if (plantSortColumn === column) {
+        plantSortDirection = plantSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        plantSortColumn = column;
+        plantSortDirection = 'asc';
+    }
+    filterAndRenderPlants();
 }
 
 async function loadPlants() {
@@ -631,14 +984,7 @@ async function loadPlants() {
         const response = await fetch(`${API_BASE}/plants`);
         plants = await response.json();
         
-        const filter = elements.plantStatusFilter?.value || 'active';
-        let filteredPlants = plants;
-        
-        if (filter !== 'all') {
-            filteredPlants = plants.filter(p => p.status === filter);
-        }
-        
-        renderPlants(filteredPlants);
+        filterAndRenderPlants();
     } catch (error) {
         console.error('Failed to load plants:', error);
     }
@@ -685,6 +1031,304 @@ function renderPlants(plantList) {
             </div>
         `;
     }).join('');
+}
+
+function renderPlantsTable(plantList) {
+    if (!elements.plantsTableBody) return;
+    
+    // Sort the data
+    const sortedPlants = [...plantList].sort((a, b) => {
+        let aVal, bVal;
+        
+        switch (plantSortColumn) {
+            case 'name':
+                aVal = (a.display_name || a.name || '').toLowerCase();
+                bVal = (b.display_name || b.name || '').toLowerCase();
+                break;
+            case 'variety':
+                aVal = (a.variety || '').toLowerCase();
+                bVal = (b.variety || '').toLowerCase();
+                break;
+            case 'location':
+                aVal = (a.location || '').toLowerCase();
+                bVal = (b.location || '').toLowerCase();
+                break;
+            case 'status':
+                aVal = a.status || '';
+                bVal = b.status || '';
+                break;
+            case 'date_planted':
+                aVal = a.date_planted ? new Date(a.date_planted).getTime() : 0;
+                bVal = b.date_planted ? new Date(b.date_planted).getTime() : 0;
+                break;
+            case 'height':
+                aVal = getLatestGrowthValue(a, 'height_cm');
+                bVal = getLatestGrowthValue(b, 'height_cm');
+                break;
+            case 'health':
+                aVal = getLatestGrowthValue(a, 'health_rating');
+                bVal = getLatestGrowthValue(b, 'health_rating');
+                break;
+            case 'waterings':
+                aVal = (a.waterings || []).length;
+                bVal = (b.waterings || []).length;
+                break;
+            default:
+                aVal = '';
+                bVal = '';
+        }
+        
+        if (aVal < bVal) return plantSortDirection === 'asc' ? -1 : 1;
+        if (aVal > bVal) return plantSortDirection === 'asc' ? 1 : -1;
+        return 0;
+    });
+    
+    if (!sortedPlants.length) {
+        elements.plantsTableBody.innerHTML = `
+            <tr>
+                <td colspan="9" class="empty-table-cell">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🌱</div>
+                        <h3>No Plants Found</h3>
+                    </div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    elements.plantsTableBody.innerHTML = sortedPlants.map(plant => {
+        const displayName = plant.display_name || plant.name;
+        const plantedDate = plant.date_planted ? formatDate(new Date(plant.date_planted)) : '-';
+        const latestHeight = getLatestGrowthValue(plant, 'height_cm');
+        const latestHealth = getLatestGrowthValue(plant, 'health_rating');
+        const wateringCount = (plant.waterings || []).length;
+        
+        return `
+            <tr>
+                <td><strong>${displayName}</strong></td>
+                <td>${plant.variety || '-'}</td>
+                <td>${plant.location || '-'}</td>
+                <td><span class="plant-status ${plant.status}">${plant.status}</span></td>
+                <td>${plantedDate}</td>
+                <td>${latestHeight ? latestHeight + ' cm' : '-'}</td>
+                <td>${latestHealth ? getHealthBadge(latestHealth) : '-'}</td>
+                <td>${wateringCount}</td>
+                <td>
+                    <div class="table-actions">
+                        <button class="btn btn-small btn-secondary" onclick="viewPlant('${plant.id}')" title="View Details">👁️</button>
+                        <button class="btn btn-small btn-secondary" onclick="logGrowth('${plant.id}')" title="Log Growth">📏</button>
+                        <button class="btn btn-small btn-secondary" onclick="logWatering('${plant.id}')" title="Log Watering">💧</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function getLatestGrowthValue(plant, field) {
+    const logs = plant.growth_logs || [];
+    if (!logs.length) return null;
+    
+    // Sort by date descending and get latest
+    const sorted = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
+    return sorted[0][field];
+}
+
+function getHealthBadge(rating) {
+    let color = 'var(--success)';
+    if (rating < 4) color = 'var(--danger)';
+    else if (rating < 7) color = 'var(--warning)';
+    
+    return `<span class="health-badge" style="background: ${color}">${rating}/10</span>`;
+}
+
+function renderPlantsCharts() {
+    const filter = elements.plantStatusFilter?.value || 'active';
+    let chartPlants = plants;
+    
+    if (filter !== 'all') {
+        chartPlants = plants.filter(p => p.status === filter);
+    }
+    
+    // Apply search filter to charts too
+    if (plantSearchQuery) {
+        chartPlants = chartPlants.filter(p => 
+            (p.name || '').toLowerCase().includes(plantSearchQuery) ||
+            (p.variety || '').toLowerCase().includes(plantSearchQuery) ||
+            (p.location || '').toLowerCase().includes(plantSearchQuery)
+        );
+    }
+    
+    renderHealthDistributionChart(chartPlants);
+    renderGrowthComparisonChart(chartPlants);
+    renderWateringFrequencyChart(chartPlants);
+    renderLocationDistributionChart(chartPlants);
+}
+
+function renderHealthDistributionChart(plantList) {
+    const ctx = document.getElementById('healthDistributionChart');
+    if (!ctx) return;
+    
+    // Destroy existing chart
+    if (healthDistributionChart) {
+        healthDistributionChart.destroy();
+    }
+    
+    // Count plants by health rating groups
+    const healthGroups = { 'Excellent (8-10)': 0, 'Good (5-7)': 0, 'Poor (1-4)': 0, 'No Data': 0 };
+    
+    plantList.forEach(plant => {
+        const health = getLatestGrowthValue(plant, 'health_rating');
+        if (!health) healthGroups['No Data']++;
+        else if (health >= 8) healthGroups['Excellent (8-10)']++;
+        else if (health >= 5) healthGroups['Good (5-7)']++;
+        else healthGroups['Poor (1-4)']++;
+    });
+    
+    healthDistributionChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(healthGroups),
+            datasets: [{
+                data: Object.values(healthGroups),
+                backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#6b7280']
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+}
+
+function renderGrowthComparisonChart(plantList) {
+    const ctx = document.getElementById('growthComparisonChart');
+    if (!ctx) return;
+    
+    if (growthComparisonChart) {
+        growthComparisonChart.destroy();
+    }
+    
+    // Get plants with growth data
+    const plantsWithGrowth = plantList
+        .filter(p => (p.growth_logs || []).length > 0)
+        .slice(0, 10); // Top 10 for readability
+    
+    if (!plantsWithGrowth.length) {
+        growthComparisonChart = new Chart(ctx, {
+            type: 'bar',
+            data: { labels: ['No Data'], datasets: [{ data: [0] }] },
+            options: { responsive: true }
+        });
+        return;
+    }
+    
+    const labels = plantsWithGrowth.map(p => p.display_name || p.name);
+    const heights = plantsWithGrowth.map(p => getLatestGrowthValue(p, 'height_cm') || 0);
+    
+    growthComparisonChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Height (cm)',
+                data: heights,
+                backgroundColor: '#3b82f6'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Height (cm)' } }
+            }
+        }
+    });
+}
+
+function renderWateringFrequencyChart(plantList) {
+    const ctx = document.getElementById('wateringFrequencyChart');
+    if (!ctx) return;
+    
+    if (wateringFrequencyChart) {
+        wateringFrequencyChart.destroy();
+    }
+    
+    // Get watering counts by plant
+    const plantsWithWatering = plantList
+        .filter(p => (p.waterings || []).length > 0)
+        .slice(0, 10);
+    
+    if (!plantsWithWatering.length) {
+        wateringFrequencyChart = new Chart(ctx, {
+            type: 'bar',
+            data: { labels: ['No Data'], datasets: [{ data: [0] }] },
+            options: { responsive: true }
+        });
+        return;
+    }
+    
+    const labels = plantsWithWatering.map(p => p.display_name || p.name);
+    const counts = plantsWithWatering.map(p => (p.waterings || []).length);
+    
+    wateringFrequencyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Watering Events',
+                data: counts,
+                backgroundColor: '#06b6d4'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Count' } }
+            }
+        }
+    });
+}
+
+function renderLocationDistributionChart(plantList) {
+    const ctx = document.getElementById('locationDistributionChart');
+    if (!ctx) return;
+    
+    if (locationDistributionChart) {
+        locationDistributionChart.destroy();
+    }
+    
+    // Count plants by location
+    const locationCounts = {};
+    plantList.forEach(plant => {
+        const loc = plant.location || 'Unknown';
+        locationCounts[loc] = (locationCounts[loc] || 0) + 1;
+    });
+    
+    locationDistributionChart = new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: Object.keys(locationCounts),
+            datasets: [{
+                data: Object.values(locationCounts),
+                backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
 }
 
 // ============== Tasks ==============
@@ -883,6 +1527,175 @@ async function loadWeather() {
     }
 }
 
+function setupWeatherSearch() {
+    elements.fetchWeatherBtn?.addEventListener('click', fetchWeatherByLocation);
+    elements.weatherSearchInput?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') fetchWeatherByLocation();
+    });
+}
+
+async function fetchWeatherByLocation() {
+    const query = elements.weatherSearchInput?.value.trim();
+    if (!query) {
+        showToast('Please enter a zipcode or city name', 'error');
+        return;
+    }
+    
+    elements.fetchWeatherBtn.disabled = true;
+    elements.fetchWeatherBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Searching...';
+    elements.weatherSearchResult.classList.add('hidden');
+    
+    try {
+        const response = await fetch(`${API_BASE}/weather/search?q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        if (data.error) {
+            if (data.hint) {
+                // API key not configured - show setup prompt
+                elements.weatherSearchResult.innerHTML = `
+                    <div class="weather-error">
+                        <p>⚠️ ${data.error}</p>
+                        <p class="hint">${data.hint}</p>
+                        <button class="btn btn-secondary btn-sm" onclick="showWeatherApiSetup()">Configure API Key</button>
+                    </div>
+                `;
+            } else {
+                elements.weatherSearchResult.innerHTML = `
+                    <div class="weather-error">
+                        <p>❌ ${data.error}</p>
+                    </div>
+                `;
+            }
+            elements.weatherSearchResult.classList.remove('hidden');
+            return;
+        }
+        
+        // Display the weather result
+        const iconUrl = data.icon ? `https://openweathermap.org/img/wn/${data.icon}@2x.png` : '';
+        elements.weatherSearchResult.innerHTML = `
+            <div class="weather-result-card">
+                <div class="weather-result-header">
+                    ${iconUrl ? `<img src="${iconUrl}" alt="Weather icon" class="weather-icon-img">` : ''}
+                    <div>
+                        <h4>${data.location}${data.country ? `, ${data.country}` : ''}</h4>
+                        <p class="weather-condition">${data.conditions}</p>
+                    </div>
+                </div>
+                <div class="weather-result-details">
+                    <div class="weather-stat">
+                        <span class="stat-value">${Math.round(data.temperature)}°C</span>
+                        <span class="stat-label">Current</span>
+                    </div>
+                    <div class="weather-stat">
+                        <span class="stat-value">${Math.round(data.temperature_high)}°</span>
+                        <span class="stat-label">High</span>
+                    </div>
+                    <div class="weather-stat">
+                        <span class="stat-value">${Math.round(data.temperature_low)}°</span>
+                        <span class="stat-label">Low</span>
+                    </div>
+                    <div class="weather-stat">
+                        <span class="stat-value">${data.humidity}%</span>
+                        <span class="stat-label">Humidity</span>
+                    </div>
+                    <div class="weather-stat">
+                        <span class="stat-value">${data.wind_speed} m/s</span>
+                        <span class="stat-label">Wind</span>
+                    </div>
+                </div>
+                <div class="weather-result-actions">
+                    <button class="btn btn-primary btn-sm" onclick="saveWeatherToLog(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                        💾 Save to Weather Log
+                    </button>
+                </div>
+            </div>
+        `;
+        elements.weatherSearchResult.classList.remove('hidden');
+        
+    } catch (error) {
+        elements.weatherSearchResult.innerHTML = `
+            <div class="weather-error">
+                <p>❌ Failed to fetch weather: ${error.message}</p>
+            </div>
+        `;
+        elements.weatherSearchResult.classList.remove('hidden');
+    } finally {
+        elements.fetchWeatherBtn.disabled = false;
+        elements.fetchWeatherBtn.innerHTML = '<span>🔍</span> Get Weather';
+    }
+}
+
+async function saveWeatherToLog(weatherData) {
+    try {
+        const data = {
+            temperature_high: weatherData.temperature_high,
+            temperature_low: weatherData.temperature_low,
+            humidity: weatherData.humidity,
+            conditions: weatherData.conditions,
+            notes: `Location: ${weatherData.location}${weatherData.country ? ', ' + weatherData.country : ''}`
+        };
+        
+        await fetch(`${API_BASE}/weather`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        
+        showToast('Weather saved to log!', 'success');
+        await loadWeather();
+    } catch (error) {
+        showToast('Failed to save weather', 'error');
+    }
+}
+
+function showWeatherApiSetup() {
+    showModal('⚙️ Weather API Setup', `
+        <div class="api-setup">
+            <p>To use the weather lookup feature, you need an OpenWeatherMap API key.</p>
+            <ol class="setup-steps">
+                <li>Go to <a href="https://openweathermap.org/api" target="_blank">openweathermap.org/api</a></li>
+                <li>Sign up for a free account</li>
+                <li>Get your API key from the dashboard</li>
+                <li>Paste it below</li>
+            </ol>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="text" id="weatherApiKeyInput" placeholder="Enter your OpenWeatherMap API key">
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveWeatherApiKey()">Save API Key</button>
+            </div>
+        </div>
+    `);
+}
+
+async function saveWeatherApiKey() {
+    const apiKey = document.getElementById('weatherApiKeyInput')?.value.trim();
+    if (!apiKey) {
+        showToast('Please enter an API key', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/weather/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showToast('API key saved!', 'success');
+            closeModal();
+        } else {
+            showToast(data.error || 'Failed to save', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to save API key', 'error');
+    }
+}
+
 function renderWeather(weatherList) {
     if (!weatherList.length) {
         elements.weatherList.innerHTML = `
@@ -928,6 +1741,267 @@ function renderWeather(weatherList) {
             </div>
         `;
     }).join('');
+}
+
+// ============== Leaderboard ==============
+function setupLeaderboard() {
+    // Metric selector
+    elements.leaderboardMetric?.addEventListener('change', loadLeaderboard);
+    
+    // Category selector
+    elements.leaderboardCategory?.addEventListener('change', loadLeaderboard);
+    
+    // Select plants button
+    elements.selectPlantsBtn?.addEventListener('click', showPlantSelectorModal);
+}
+
+async function loadLeaderboard() {
+    const metric = elements.leaderboardMetric?.value || 'growth_rate';
+    const category = elements.leaderboardCategory?.value || 'all';
+    
+    // Get selected plant IDs (if any)
+    const plantIds = selectedLeaderboardPlants.size > 0 
+        ? Array.from(selectedLeaderboardPlants).join(',') 
+        : '';
+    
+    try {
+        // Also fetch plants to populate categories
+        const plantsResponse = await fetch(`${API_BASE}/plants`);
+        if (plantsResponse.ok) {
+            const plants = await plantsResponse.json();
+            populateLeaderboardCategories(plants);
+        }
+        
+        let url = `${API_BASE}/leaderboard?metric=${metric}`;
+        if (category !== 'all') url += `&category=${encodeURIComponent(category)}`;
+        if (plantIds) url += `&plant_ids=${plantIds}`;
+        
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load leaderboard');
+        
+        const data = await response.json();
+        renderLeaderboard(data, metric);
+        renderLeaderboardChart(data, metric);
+        
+        // Update selected plants count
+        if (elements.selectedPlantsCount) {
+            elements.selectedPlantsCount.textContent = selectedLeaderboardPlants.size > 0 
+                ? `(${selectedLeaderboardPlants.size} selected)` 
+                : '(All plants)';
+        }
+    } catch (error) {
+        console.error('Error loading leaderboard:', error);
+        if (elements.leaderboardRankings) {
+            elements.leaderboardRankings.innerHTML = '<div class="error-message">Failed to load leaderboard data</div>';
+        }
+    }
+}
+
+function populateLeaderboardCategories(plants) {
+    if (!elements.leaderboardCategory) return;
+    
+    const currentValue = elements.leaderboardCategory.value;
+    const categories = [...new Set(plants.map(p => p.category).filter(Boolean))];
+    
+    // Only rebuild if categories changed
+    if (elements.leaderboardCategory.options.length !== categories.length + 1) {
+        elements.leaderboardCategory.innerHTML = '<option value="all">All Plants</option>' +
+            categories.map(cat => `<option value="${cat}">${cat}</option>`).join('');
+        
+        // Restore selection if still valid
+        if (categories.includes(currentValue)) {
+            elements.leaderboardCategory.value = currentValue;
+        }
+    }
+}
+
+function renderLeaderboard(data, metric) {
+    if (!elements.leaderboardRankings) return;
+    
+    const rankings = data.rankings || [];
+    
+    if (rankings.length === 0) {
+        elements.leaderboardRankings.innerHTML = `
+            <div class="empty-state">
+                <span class="empty-icon">🏆</span>
+                <p>No ranking data available</p>
+                <p class="empty-hint">Add growth logs or harvest records to see rankings</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const metricLabels = {
+        growth_rate: 'Growth Rate',
+        health: 'Health Score',
+        harvests: 'Total Harvests'
+    };
+    
+    const metricUnits = {
+        growth_rate: 'cm/day',
+        health: '/10',
+        harvests: 'harvests'
+    };
+    
+    elements.leaderboardRankings.innerHTML = rankings.map((item, index) => {
+        const rank = index + 1;
+        const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
+        const rankClass = rank <= 3 ? `rank-${rank}` : '';
+        
+        // Get value based on the metric - backend returns metric as property name
+        const rawValue = item[metric] || 0;
+        let displayValue = rawValue;
+        if (metric === 'growth_rate') {
+            displayValue = rawValue.toFixed(2);
+        } else if (metric === 'health') {
+            displayValue = rawValue.toFixed(1);
+        }
+        
+        // Use display_name if available, otherwise fall back to name
+        const plantName = item.display_name || item.name;
+        
+        return `
+            <div class="ranking-item ${rankClass}">
+                <div class="ranking-position">
+                    ${medal ? `<span class="medal">${medal}</span>` : `<span class="rank-number">${rank}</span>`}
+                </div>
+                <div class="ranking-info">
+                    <div class="ranking-name">${plantName}</div>
+                    <div class="ranking-category">${item.category || 'Uncategorized'}</div>
+                </div>
+                <div class="ranking-value">
+                    <span class="value">${displayValue}</span>
+                    <span class="unit">${metricUnits[metric]}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Update chart title
+    if (elements.leaderboardChartTitle) {
+        elements.leaderboardChartTitle.textContent = `${metricLabels[metric]} Rankings`;
+    }
+}
+
+function renderLeaderboardChart(data, metric) {
+    const canvas = document.getElementById('leaderboardChart');
+    if (!canvas) return;
+    
+    const rankings = data.rankings || [];
+    if (rankings.length === 0) {
+        if (leaderboardChart) {
+            leaderboardChart.destroy();
+            leaderboardChart = null;
+        }
+        return;
+    }
+    
+    // Take top 10 for the chart
+    const topRankings = rankings.slice(0, 10);
+    
+    const metricColors = {
+        growth_rate: { bg: 'rgba(76, 175, 80, 0.6)', border: 'rgba(76, 175, 80, 1)' },
+        health: { bg: 'rgba(33, 150, 243, 0.6)', border: 'rgba(33, 150, 243, 1)' },
+        harvests: { bg: 'rgba(255, 152, 0, 0.6)', border: 'rgba(255, 152, 0, 1)' }
+    };
+    
+    const colors = metricColors[metric] || metricColors.growth_rate;
+    
+    const chartData = {
+        labels: topRankings.map(r => {
+            const name = r.display_name || r.name;
+            return name.length > 15 ? name.substring(0, 15) + '...' : name;
+        }),
+        datasets: [{
+            label: metric.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+            data: topRankings.map(r => r[metric] || 0),
+            backgroundColor: colors.bg,
+            borderColor: colors.border,
+            borderWidth: 1
+        }]
+    };
+    
+    if (leaderboardChart) {
+        leaderboardChart.destroy();
+    }
+    
+    leaderboardChart = new Chart(canvas, {
+        type: 'bar',
+        data: chartData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: 'y',
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                x: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+}
+
+async function showPlantSelectorModal() {
+    // Load all plants
+    try {
+        const response = await fetch(`${API_BASE}/plants`);
+        if (!response.ok) throw new Error('Failed to load plants');
+        
+        const plants = await response.json();
+        
+        const modalContent = `
+            <h2>Select Plants for Comparison</h2>
+            <div class="plant-selector-list">
+                ${plants.map(plant => `
+                    <label class="plant-selector-item">
+                        <input type="checkbox" value="${plant.id}" 
+                            ${selectedLeaderboardPlants.has(plant.id) ? 'checked' : ''}>
+                        <span class="plant-selector-name">${plant.name}</span>
+                        <span class="plant-selector-category">${plant.category || 'Uncategorized'}</span>
+                    </label>
+                `).join('')}
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="clearPlantSelection()">Clear All</button>
+                <button type="button" class="btn btn-secondary" onclick="selectAllPlants()">Select All</button>
+                <button type="button" class="btn btn-primary" onclick="applyPlantSelection()">Apply</button>
+            </div>
+        `;
+        
+        openModal(modalContent);
+    } catch (error) {
+        console.error('Error loading plants for selector:', error);
+        alert('Failed to load plants');
+    }
+}
+
+function clearPlantSelection() {
+    const checkboxes = document.querySelectorAll('.plant-selector-item input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = false);
+}
+
+function selectAllPlants() {
+    const checkboxes = document.querySelectorAll('.plant-selector-item input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = true);
+}
+
+function applyPlantSelection() {
+    const checkboxes = document.querySelectorAll('.plant-selector-item input[type="checkbox"]');
+    selectedLeaderboardPlants.clear();
+    
+    checkboxes.forEach(cb => {
+        if (cb.checked) {
+            selectedLeaderboardPlants.add(cb.value);
+        }
+    });
+    
+    closeModal();
+    loadLeaderboard();
 }
 
 // ============== Buttons ==============
@@ -1211,6 +2285,47 @@ async function viewPlant(plantId) {
     const growthLogs = plant.growth_logs || [];
     const latestGrowth = growthLogs[growthLogs.length - 1];
     const displayName = plant.display_name || plant.name;
+    const waterings = plant.waterings || [];
+    const fertilizations = plant.fertilizations || [];
+    
+    // Generate watering history HTML
+    const wateringHistoryHtml = waterings.length > 0 ? `
+        <div class="history-section">
+            <h4>💧 Recent Watering</h4>
+            <div class="history-list">
+                ${waterings.slice(-5).reverse().map(w => `
+                    <div class="history-item">
+                        <div class="history-date">${formatDate(new Date(w.date))}</div>
+                        <div class="history-details">
+                            ${w.amount_ml ? `<span class="history-tag">${w.amount_ml} ml</span>` : ''}
+                            ${w.method ? `<span class="history-tag method">${w.method}</span>` : ''}
+                        </div>
+                        ${w.notes ? `<div class="history-notes">${w.notes}</div>` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    ` : '';
+    
+    // Generate fertilization history HTML
+    const fertilizationHistoryHtml = fertilizations.length > 0 ? `
+        <div class="history-section">
+            <h4>🧪 Recent Feeding / Fertilization</h4>
+            <div class="history-list">
+                ${fertilizations.slice(-5).reverse().map(f => `
+                    <div class="history-item fertilization">
+                        <div class="history-date">${formatDate(new Date(f.date))}</div>
+                        <div class="history-details">
+                            ${f.fertilizer_type ? `<span class="history-tag fertilizer">${f.fertilizer_type}</span>` : ''}
+                            ${f.amount ? `<span class="history-tag">${f.amount}</span>` : ''}
+                            ${f.npk_ratio ? `<span class="history-tag npk">NPK: ${f.npk_ratio}</span>` : ''}
+                        </div>
+                        ${f.notes ? `<div class="history-notes">${f.notes}</div>` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    ` : '';
     
     showModal(`🌱 ${displayName}`, `
         <div class="plant-details">
@@ -1259,11 +2374,18 @@ async function viewPlant(plantId) {
                 </div>
             </div>
             
+            <!-- Watering & Feeding History -->
+            <div class="care-history">
+                ${wateringHistoryHtml}
+                ${fertilizationHistoryHtml}
+            </div>
+            
             <div class="form-group">
                 <label>Notes</label>
                 <p>${plant.notes || 'No notes'}</p>
             </div>
             <div class="form-actions">
+                <button class="btn btn-secondary" onclick="logFertilization('${plant.id}')">🧪 Add Feeding</button>
                 <button class="btn btn-primary" onclick="showLabel('${plant.id}')">🏷️ Generate Label</button>
                 <button class="btn btn-danger" onclick="deletePlant('${plant.id}')">Delete Plant</button>
                 <button class="btn btn-secondary" onclick="closeModal()">Close</button>
@@ -1595,6 +2717,11 @@ function logWatering(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
     
+    // Get available recipes for the dropdown
+    const recipeOptions = recipes.length > 0 
+        ? recipes.map(r => `<option value="${r.name}">${r.name}</option>`).join('')
+        : '';
+    
     showModal(`💧 Log Watering - ${plant.name}`, `
         <form id="logWateringForm" data-plant-id="${plantId}">
             <div class="form-row">
@@ -1604,18 +2731,27 @@ function logWatering(plantId) {
                 </div>
                 <div class="form-group">
                     <label>Method</label>
-                    <select name="method">
+                    <select name="method" id="wateringMethod">
                         <option value="watering can">Watering Can</option>
                         <option value="hose">Hose</option>
                         <option value="compost tea">Compost Tea</option>
                         <option value="spray">Spray</option>
                         <option value="soak">Deep Soak</option>
+                        <option value="fertilizer">Fertilizer Solution</option>
                     </select>
                 </div>
             </div>
+            <div class="form-group recipe-select ${recipeOptions ? '' : 'hidden'}" id="recipeSelectGroup">
+                <label>Recipe Used (optional)</label>
+                <select name="recipe" id="recipeSelect">
+                    <option value="">No recipe / Plain water</option>
+                    ${recipeOptions}
+                </select>
+                <small class="form-hint">Select if you used a compost tea or fertilizer recipe</small>
+            </div>
             <div class="form-group">
                 <label>Notes</label>
-                <textarea name="notes" rows="2" placeholder="Any notes..."></textarea>
+                <textarea name="notes" rows="2" placeholder="Any notes about this watering..."></textarea>
             </div>
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -1623,6 +2759,17 @@ function logWatering(plantId) {
             </div>
         </form>
     `);
+    
+    // Show recipe dropdown when compost tea or fertilizer is selected
+    const methodSelect = document.getElementById('wateringMethod');
+    const recipeGroup = document.getElementById('recipeSelectGroup');
+    
+    if (methodSelect && recipeGroup) {
+        methodSelect.addEventListener('change', () => {
+            const showRecipe = ['compost tea', 'fertilizer'].includes(methodSelect.value);
+            recipeGroup.classList.toggle('hidden', !showRecipe);
+        });
+    }
     
     document.getElementById('logWateringForm').addEventListener('submit', handleLogWatering);
 }
@@ -1636,6 +2783,14 @@ async function handleLogWatering(e) {
     
     if (data.amount_ml) data.amount_ml = parseFloat(data.amount_ml);
     
+    // Include recipe in notes if selected
+    if (data.recipe && data.recipe !== '') {
+        data.notes = data.notes 
+            ? `${data.notes} | Recipe: ${data.recipe}`
+            : `Recipe: ${data.recipe}`;
+    }
+    delete data.recipe;
+    
     try {
         await fetch(`${API_BASE}/plants/${plantId}/watering`, {
             method: 'POST',
@@ -1644,8 +2799,97 @@ async function handleLogWatering(e) {
         });
         showToast('Watering logged!', 'success');
         closeModal();
+        await loadPlants();
     } catch (error) {
         showToast('Failed to log watering', 'error');
+    }
+}
+
+function logFertilization(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    if (!plant) return;
+    
+    // Get available recipes for the dropdown
+    const recipeOptions = recipes.length > 0 
+        ? recipes.map(r => `<option value="${r.name}">${r.name}</option>`).join('')
+        : '';
+    
+    showModal(`🧪 Log Fertilization - ${plant.name}`, `
+        <form id="logFertilizationForm" data-plant-id="${plantId}">
+            <div class="form-group">
+                <label>Fertilizer Type *</label>
+                <select name="fertilizer_type" id="fertilizerType" required>
+                    <option value="">Select type...</option>
+                    <option value="compost tea">Compost Tea</option>
+                    <option value="liquid fertilizer">Liquid Fertilizer</option>
+                    <option value="granular">Granular Fertilizer</option>
+                    <option value="fish emulsion">Fish Emulsion</option>
+                    <option value="seaweed extract">Seaweed Extract</option>
+                    <option value="worm castings">Worm Castings</option>
+                    <option value="bone meal">Bone Meal</option>
+                    <option value="blood meal">Blood Meal</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+            ${recipeOptions ? `
+            <div class="form-group">
+                <label>Recipe Used (optional)</label>
+                <select name="recipe" id="fertRecipeSelect">
+                    <option value="">Custom / No specific recipe</option>
+                    ${recipeOptions}
+                </select>
+            </div>
+            ` : ''}
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="text" name="amount" placeholder="e.g., 1 cup, 500ml">
+                </div>
+                <div class="form-group">
+                    <label>NPK Ratio</label>
+                    <input type="text" name="npk_ratio" placeholder="e.g., 10-10-10">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Any notes about this feeding..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Fertilization</button>
+            </div>
+        </form>
+    `);
+    
+    document.getElementById('logFertilizationForm').addEventListener('submit', handleLogFertilization);
+}
+
+async function handleLogFertilization(e) {
+    e.preventDefault();
+    const form = e.target;
+    const plantId = form.dataset.plantId;
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    
+    // Include recipe in notes if selected
+    if (data.recipe && data.recipe !== '') {
+        data.notes = data.notes 
+            ? `${data.notes} | Recipe: ${data.recipe}`
+            : `Recipe: ${data.recipe}`;
+    }
+    delete data.recipe;
+    
+    try {
+        await fetch(`${API_BASE}/plants/${plantId}/fertilization`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        showToast('Fertilization logged!', 'success');
+        closeModal();
+        await loadPlants();
+    } catch (error) {
+        showToast('Failed to log fertilization', 'error');
     }
 }
 

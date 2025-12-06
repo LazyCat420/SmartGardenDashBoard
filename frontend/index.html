@@ -52,14 +52,19 @@
                     <span class="nav-icon">🌤️</span>
                     <span>Weather</span>
                 </a>
+                <a href="#" class="nav-item" data-page="leaderboard">
+                    <span class="nav-icon">🏆</span>
+                    <span>Leaderboard</span>
+                </a>
                 <a href="#" class="nav-item" data-page="scanner">
                     <span class="nav-icon">📷</span>
                     <span>Scanner</span>
                 </a>
             </nav>
-            <div class="llm-status">
+            <div class="llm-status" id="llmStatusContainer" title="Click to open LLM settings">
                 <span class="status-dot" id="llmStatusDot"></span>
                 <span id="llmStatusText">Checking LLM...</span>
+                <button class="settings-btn" id="llmSettingsBtn" title="LLM Settings">⚙️</button>
             </div>
         </aside>
 
@@ -168,9 +173,25 @@
             <div class="page" id="plantsPage">
                 <div class="page-header">
                     <h2>Your Plants</h2>
-                    <button class="btn btn-primary" id="addPlantBtn">+ Add Plant</button>
+                    <div class="header-actions-group">
+                        <div class="view-toggle">
+                            <button class="view-btn active" data-view="grid" title="Grid View">
+                                <span>📊</span>
+                            </button>
+                            <button class="view-btn" data-view="table" title="Table View">
+                                <span>📋</span>
+                            </button>
+                            <button class="view-btn" data-view="charts" title="Charts View">
+                                <span>📈</span>
+                            </button>
+                        </div>
+                        <button class="btn btn-primary" id="addPlantBtn">+ Add Plant</button>
+                    </div>
                 </div>
                 <div class="filter-bar">
+                    <div class="search-box">
+                        <input type="text" id="plantSearchInput" placeholder="🔍 Search plants..." title="Search by name, variety, or location">
+                    </div>
                     <select id="plantStatusFilter" title="Filter plants by status">
                         <option value="active">Active</option>
                         <option value="all">All Plants</option>
@@ -178,7 +199,51 @@
                         <option value="removed">Removed</option>
                     </select>
                 </div>
+                
+                <!-- Grid View (default) -->
                 <div id="plantsList" class="plants-grid"></div>
+                
+                <!-- Table View -->
+                <div id="plantsTable" class="plants-table-container hidden">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th data-sort="name">Name ↕</th>
+                                <th data-sort="variety">Variety ↕</th>
+                                <th data-sort="location">Location ↕</th>
+                                <th data-sort="status">Status ↕</th>
+                                <th data-sort="date_planted">Planted ↕</th>
+                                <th data-sort="height">Height (cm) ↕</th>
+                                <th data-sort="health">Health ↕</th>
+                                <th data-sort="waterings">Waterings ↕</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="plantsTableBody"></tbody>
+                    </table>
+                </div>
+                
+                <!-- Charts View -->
+                <div id="plantsCharts" class="plants-charts-container hidden">
+                    <div class="charts-grid">
+                        <div class="card chart-card">
+                            <h3>📊 Health Distribution</h3>
+                            <canvas id="healthDistributionChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>🌱 Growth Comparison</h3>
+                            <canvas id="growthComparisonChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>💧 Watering Frequency</h3>
+                            <canvas id="wateringFrequencyChart"></canvas>
+                        </div>
+                        <div class="card chart-card">
+                            <h3>📍 Plants by Location</h3>
+                            <canvas id="locationDistributionChart"></canvas>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Tasks Page -->
@@ -262,7 +327,69 @@
                     <h2>Weather Log</h2>
                     <button class="btn btn-primary" id="addWeatherBtn">+ Log Weather</button>
                 </div>
+                
+                <!-- Weather Search Section -->
+                <div class="weather-search-section">
+                    <div class="card weather-search-card">
+                        <h3>🌤️ Get Current Weather</h3>
+                        <p class="card-subtitle">Enter a US zipcode or city name to fetch current weather conditions</p>
+                        <div class="weather-search-form">
+                            <input type="text" id="weatherSearchInput" placeholder="Enter zipcode (e.g., 90210) or city name" />
+                            <button class="btn btn-primary" id="fetchWeatherBtn">
+                                <span>🔍</span> Get Weather
+                            </button>
+                        </div>
+                        <div id="weatherSearchResult" class="weather-result hidden"></div>
+                    </div>
+                </div>
+                
+                <h3 class="section-title">Weather History</h3>
                 <div id="weatherList" class="weather-list"></div>
+            </div>
+
+            <!-- Leaderboard Page -->
+            <div class="page" id="leaderboardPage">
+                <div class="page-header">
+                    <h2>🏆 Plant Leaderboard</h2>
+                </div>
+                
+                <div class="leaderboard-controls">
+                    <div class="metric-selector">
+                        <label>Rank by:</label>
+                        <select id="leaderboardMetric" title="Select ranking metric">
+                            <option value="growth_rate">📈 Growth Rate (cm/day)</option>
+                            <option value="health">💚 Health Score (avg)</option>
+                            <option value="harvests">🥕 Harvest Count</option>
+                        </select>
+                    </div>
+                    <div class="category-selector">
+                        <label>Category:</label>
+                        <select id="leaderboardCategory" title="Filter by plant type">
+                            <option value="all">All Plants</option>
+                        </select>
+                    </div>
+                    <div class="plant-selector">
+                        <label>Include Plants:</label>
+                        <button class="btn btn-secondary btn-sm" id="selectPlantsBtn">Select Plants</button>
+                        <span id="selectedPlantsCount" class="selected-count">All</span>
+                    </div>
+                </div>
+                
+                <div class="leaderboard-container">
+                    <div class="leaderboard-chart-section">
+                        <div class="card">
+                            <h3 id="leaderboardChartTitle">📊 Growth Rate Comparison</h3>
+                            <canvas id="leaderboardChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <div class="leaderboard-rankings">
+                        <div class="card">
+                            <h3>🏅 Rankings</h3>
+                            <div id="leaderboardRankings" class="rankings-list"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Scanner Page -->
@@ -374,6 +501,68 @@
                 <button class="modal-close" id="modalClose">&times;</button>
             </div>
             <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <!-- LLM Settings Modal -->
+    <div class="modal-overlay" id="llmSettingsOverlay">
+        <div class="modal llm-settings-modal">
+            <div class="modal-header">
+                <h3>🤖 LLM Settings</h3>
+                <button class="modal-close" id="llmSettingsClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <h4>Connection Status</h4>
+                    <div class="status-display" id="llmStatusDisplay">
+                        <div class="status-indicator">
+                            <span class="status-dot large" id="settingsStatusDot"></span>
+                            <span id="settingsStatusText">Checking...</span>
+                        </div>
+                        <div class="status-details" id="statusDetails"></div>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h4>API Configuration</h4>
+                    <div class="form-group">
+                        <label for="llmUrlInput">API Endpoint URL</label>
+                        <input type="text" id="llmUrlInput" placeholder="http://localhost:1234/v1/chat/completions">
+                        <small class="form-hint">Default: http://localhost:1234/v1/chat/completions</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="llmModelInput">Model Name</label>
+                        <input type="text" id="llmModelInput" placeholder="ibm-granite/granite-3.3-8b-instruct">
+                        <small class="form-hint">Enter the model name as shown in LMStudio</small>
+                    </div>
+                </div>
+                
+                <div class="settings-actions">
+                    <button class="btn btn-secondary" id="resetSettingsBtn">Reset to Defaults</button>
+                    <button class="btn btn-secondary" id="testConnectionBtn">🔌 Test Connection</button>
+                    <button class="btn btn-secondary" id="testToolsBtn">🔧 Test Tool Calling</button>
+                    <button class="btn btn-primary" id="saveSettingsBtn">💾 Save Settings</button>
+                </div>
+                
+                <div class="settings-section">
+                    <h4>Debug Logs</h4>
+                    <button class="btn btn-secondary btn-sm" id="viewLogsBtn">📋 View Recent Logs</button>
+                    <div class="logs-container hidden" id="logsContainer">
+                        <pre id="logsContent"></pre>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h4>Troubleshooting Tips</h4>
+                    <ul class="tips-list">
+                        <li>Make sure LMStudio is running and a model is loaded</li>
+                        <li>The model must support <strong>function/tool calling</strong></li>
+                        <li>Recommended models: Granite, Mistral-Instruct, Llama with function calling</li>
+                        <li>Default port for LMStudio is <code>1234</code></li>
+                        <li>Check the debug logs if issues persist</li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </div>
 

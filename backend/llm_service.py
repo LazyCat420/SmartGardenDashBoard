@@ -5,12 +5,63 @@ Uses LMStudio local API with tool calling to extract garden data from natural la
 
 import requests
 import json
+import os
+import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-# LMStudio API configuration
-LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
-MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"  # Can be changed based on loaded model
+# Configure logging for LLM debugging
+logging.basicConfig(level=logging.DEBUG)
+llm_logger = logging.getLogger('llm_service')
+llm_logger.setLevel(logging.DEBUG)
+
+# Create file handler for detailed logs
+log_dir = os.path.dirname(os.path.abspath(__file__))
+log_file = os.path.join(log_dir, 'llm_debug.log')
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+llm_logger.addHandler(file_handler)
+
+# Settings file path
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+
+# Default LMStudio API configuration
+DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
+DEFAULT_MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"
+
+def load_llm_settings() -> Dict[str, str]:
+    """Load LLM settings from file or return defaults."""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                llm_logger.info(f"Loaded settings from {SETTINGS_FILE}: {settings}")
+                return settings
+    except Exception as e:
+        llm_logger.error(f"Error loading settings: {e}")
+    
+    return {
+        "url": DEFAULT_LMSTUDIO_URL,
+        "model": DEFAULT_MODEL_NAME
+    }
+
+def save_llm_settings(url: str, model: str) -> bool:
+    """Save LLM settings to file."""
+    try:
+        settings = {"url": url, "model": model}
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+        llm_logger.info(f"Saved settings: {settings}")
+        return True
+    except Exception as e:
+        llm_logger.error(f"Error saving settings: {e}")
+        return False
+
+# Load current settings
+_settings = load_llm_settings()
+LMSTUDIO_URL = _settings.get("url", DEFAULT_LMSTUDIO_URL)
+MODEL_NAME = _settings.get("model", DEFAULT_MODEL_NAME)
 
 
 # ============== Tool Definitions ==============
@@ -398,9 +449,19 @@ Extract all relevant information and make the appropriate function calls."""
 
 
 class LLMService:
-    def __init__(self, base_url: str = LMSTUDIO_URL, model: str = MODEL_NAME):
-        self.base_url = base_url
-        self.model = model
+    def __init__(self, base_url: str = None, model: str = None):
+        # Always load fresh settings
+        settings = load_llm_settings()
+        self.base_url = base_url or settings.get("url", DEFAULT_LMSTUDIO_URL)
+        self.model = model or settings.get("model", DEFAULT_MODEL_NAME)
+        llm_logger.info(f"LLMService initialized with URL: {self.base_url}, Model: {self.model}")
+    
+    def reload_settings(self):
+        """Reload settings from file."""
+        settings = load_llm_settings()
+        self.base_url = settings.get("url", DEFAULT_LMSTUDIO_URL)
+        self.model = settings.get("model", DEFAULT_MODEL_NAME)
+        llm_logger.info(f"Settings reloaded - URL: {self.base_url}, Model: {self.model}")
     
     def extract_garden_data(self, note_text: str, existing_plants: List[str] = None) -> Dict[str, Any]:
         """
@@ -421,46 +482,99 @@ class LLMService:
             plant_list=plant_list
         )
         
+        request_payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": note_text}
+            ],
+            "tools": GARDEN_TOOLS,
+            "tool_choice": "auto",
+            "temperature": 0.3,
+            "max_tokens": 2000
+        }
+        
+        llm_logger.debug(f"=== LLM REQUEST ===")
+        llm_logger.debug(f"URL: {self.base_url}")
+        llm_logger.debug(f"Model: {self.model}")
+        llm_logger.debug(f"Note text: {note_text}")
+        llm_logger.debug(f"Existing plants: {existing_plants}")
+        llm_logger.debug(f"Request payload (without tools): {json.dumps({k:v for k,v in request_payload.items() if k != 'tools'}, indent=2)}")
+        
         try:
+            llm_logger.info(f"Sending request to {self.base_url}...")
             response = requests.post(
                 self.base_url,
                 headers={"Content-Type": "application/json"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": note_text}
-                    ],
-                    "tools": GARDEN_TOOLS,
-                    "tool_choice": "auto",
-                    "temperature": 0.3,  # Lower temperature for more consistent extraction
-                    "max_tokens": 2000
-                },
+                json=request_payload,
                 timeout=60
             )
+            
+            llm_logger.debug(f"=== LLM RESPONSE ===")
+            llm_logger.debug(f"Status code: {response.status_code}")
+            llm_logger.debug(f"Response headers: {dict(response.headers)}")
+            
+            # Log raw response text before parsing
+            raw_response = response.text
+            llm_logger.debug(f"Raw response (first 2000 chars): {raw_response[:2000]}")
+            
             response.raise_for_status()
             result = response.json()
             
+            llm_logger.debug(f"Parsed JSON response: {json.dumps(result, indent=2)[:3000]}")
+            llm_logger.info(f"Request successful, processing response...")
+            
             return self._process_response(result, note_text)
             
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as e:
+            error_msg = f"Connection error to {self.base_url}: {str(e)}"
+            llm_logger.error(error_msg)
             return {
                 "success": False,
-                "error": "Could not connect to LMStudio. Make sure it's running on localhost:1234",
+                "error": f"Could not connect to LMStudio at {self.base_url}. Make sure it's running.",
+                "error_details": str(e),
                 "raw_note": note_text,
                 "extracted_actions": []
             }
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            error_msg = f"Timeout connecting to {self.base_url}: {str(e)}"
+            llm_logger.error(error_msg)
             return {
                 "success": False,
-                "error": "LMStudio request timed out",
+                "error": "LMStudio request timed out after 60 seconds",
+                "error_details": str(e),
+                "raw_note": note_text,
+                "extracted_actions": []
+            }
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"HTTP error from {self.base_url}: {str(e)}"
+            llm_logger.error(error_msg)
+            llm_logger.error(f"Response body: {response.text[:2000] if response else 'No response'}")
+            return {
+                "success": False,
+                "error": f"HTTP error: {response.status_code} - {response.reason}",
+                "error_details": response.text[:500] if response else str(e),
+                "raw_note": note_text,
+                "extracted_actions": []
+            }
+        except json.JSONDecodeError as e:
+            error_msg = f"JSON decode error: {str(e)}"
+            llm_logger.error(error_msg)
+            llm_logger.error(f"Raw response that failed to parse: {raw_response[:1000]}")
+            return {
+                "success": False,
+                "error": "Failed to parse LLM response as JSON",
+                "error_details": str(e),
                 "raw_note": note_text,
                 "extracted_actions": []
             }
         except Exception as e:
+            error_msg = f"Unexpected error: {type(e).__name__}: {str(e)}"
+            llm_logger.error(error_msg, exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
+                "error_type": type(e).__name__,
                 "raw_note": note_text,
                 "extracted_actions": []
             }
@@ -469,11 +583,46 @@ class LLMService:
         """Process the LLM response and extract tool calls."""
         extracted_actions = []
         
+        llm_logger.debug(f"=== PROCESSING RESPONSE ===")
+        
         try:
-            message = response.get("choices", [{}])[0].get("message", {})
-            tool_calls = message.get("tool_calls", [])
+            choices = response.get("choices", [])
+            llm_logger.debug(f"Number of choices: {len(choices)}")
             
-            for tool_call in tool_calls:
+            if not choices:
+                llm_logger.warning("No choices in response")
+                return {
+                    "success": False,
+                    "error": "LLM returned no choices in response",
+                    "raw_note": original_note,
+                    "extracted_actions": [],
+                    "raw_response": response
+                }
+            
+            message = choices[0].get("message", {})
+            llm_logger.debug(f"Message keys: {message.keys()}")
+            
+            tool_calls = message.get("tool_calls", [])
+            llm_logger.debug(f"Number of tool calls: {len(tool_calls)}")
+            
+            # Check if the model doesn't support tool calling
+            finish_reason = choices[0].get("finish_reason", "")
+            llm_logger.debug(f"Finish reason: {finish_reason}")
+            
+            if not tool_calls and message.get("content"):
+                llm_logger.warning(f"No tool calls found. Model may not support function calling.")
+                llm_logger.warning(f"Content returned: {message.get('content', '')[:500]}")
+                return {
+                    "success": False,
+                    "error": "Model did not return any tool calls. It may not support function calling.",
+                    "assistant_message": message.get("content", ""),
+                    "raw_note": original_note,
+                    "extracted_actions": [],
+                    "hint": "Try using a model that supports function/tool calling like granite, mistral, or llama with function calling support."
+                }
+            
+            for i, tool_call in enumerate(tool_calls):
+                llm_logger.debug(f"Processing tool call {i}: {tool_call}")
                 function_info = tool_call.get("function", {})
                 function_name = function_info.get("name")
                 
@@ -482,9 +631,12 @@ class LLMService:
                 if isinstance(arguments, str):
                     try:
                         arguments = json.loads(arguments)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        llm_logger.error(f"Failed to parse arguments for {function_name}: {e}")
+                        llm_logger.error(f"Raw arguments: {arguments}")
                         arguments = {}
                 
+                llm_logger.info(f"Extracted action: {function_name} with params: {arguments}")
                 extracted_actions.append({
                     "action": function_name,
                     "parameters": arguments,
@@ -493,6 +645,8 @@ class LLMService:
             
             # Also get any text response
             assistant_message = message.get("content", "")
+            
+            llm_logger.info(f"Successfully extracted {len(extracted_actions)} actions")
             
             return {
                 "success": True,
@@ -503,6 +657,7 @@ class LLMService:
             }
             
         except Exception as e:
+            llm_logger.error(f"Error processing response: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": f"Error processing response: {str(e)}",
@@ -511,8 +666,21 @@ class LLMService:
             }
     
     def test_connection(self) -> Dict[str, Any]:
-        """Test if LMStudio is running and accessible."""
+        """Test if LMStudio is running and accessible with detailed diagnostics."""
+        llm_logger.info(f"=== CONNECTION TEST ===")
+        llm_logger.info(f"Testing connection to: {self.base_url}")
+        llm_logger.info(f"Using model: {self.model}")
+        
+        result = {
+            "connected": False,
+            "url": self.base_url,
+            "model": self.model,
+            "message": ""
+        }
+        
         try:
+            # First, try a simple request
+            llm_logger.debug("Sending test request...")
             response = requests.post(
                 self.base_url,
                 headers={"Content-Type": "application/json"},
@@ -524,14 +692,121 @@ class LLMService:
                     "temperature": 0.1,
                     "max_tokens": 10
                 },
-                timeout=10
+                timeout=15
             )
+            
+            llm_logger.debug(f"Response status: {response.status_code}")
+            llm_logger.debug(f"Response body: {response.text[:500]}")
+            
             response.raise_for_status()
-            return {"connected": True, "message": "LMStudio is connected and responding"}
-        except requests.exceptions.ConnectionError:
-            return {"connected": False, "message": "Cannot connect to LMStudio. Make sure it's running."}
+            response_data = response.json()
+            
+            # Check if we got a valid response
+            if response_data.get("choices"):
+                content = response_data["choices"][0].get("message", {}).get("content", "")
+                result["connected"] = True
+                result["message"] = "LMStudio is connected and responding"
+                result["model_response"] = content[:100]
+                result["supports_tools"] = "Unknown - use 'Test Tool Calling' to verify"
+                llm_logger.info(f"Connection successful! Model response: {content[:100]}")
+            else:
+                result["message"] = "Connected but got unexpected response format"
+                result["raw_response"] = str(response_data)[:200]
+                llm_logger.warning(f"Unexpected response format: {response_data}")
+                
+        except requests.exceptions.ConnectionError as e:
+            result["message"] = f"Cannot connect to LMStudio at {self.base_url}. Make sure it's running."
+            result["error_type"] = "ConnectionError"
+            result["error_details"] = str(e)
+            llm_logger.error(f"Connection error: {e}")
+            
+        except requests.exceptions.Timeout as e:
+            result["message"] = "Connection timed out. LMStudio may be starting up or overloaded."
+            result["error_type"] = "Timeout"
+            result["error_details"] = str(e)
+            llm_logger.error(f"Timeout: {e}")
+            
+        except requests.exceptions.HTTPError as e:
+            result["message"] = f"HTTP error: {response.status_code}"
+            result["error_type"] = "HTTPError"
+            result["error_details"] = response.text[:300] if response else str(e)
+            llm_logger.error(f"HTTP error: {e}")
+            
         except Exception as e:
-            return {"connected": False, "message": str(e)}
+            result["message"] = f"Unexpected error: {str(e)}"
+            result["error_type"] = type(e).__name__
+            result["error_details"] = str(e)
+            llm_logger.error(f"Unexpected error: {e}", exc_info=True)
+        
+        return result
+    
+    def test_tool_calling(self) -> Dict[str, Any]:
+        """Test if the model supports tool/function calling."""
+        llm_logger.info(f"=== TOOL CALLING TEST ===")
+        
+        simple_tool = [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "City name"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }]
+        
+        try:
+            response = requests.post(
+                self.base_url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "user", "content": "What's the weather in New York?"}
+                    ],
+                    "tools": simple_tool,
+                    "tool_choice": "auto",
+                    "temperature": 0.1,
+                    "max_tokens": 100
+                },
+                timeout=30
+            )
+            
+            llm_logger.debug(f"Tool test response: {response.text[:1000]}")
+            response.raise_for_status()
+            data = response.json()
+            
+            message = data.get("choices", [{}])[0].get("message", {})
+            tool_calls = message.get("tool_calls", [])
+            
+            if tool_calls:
+                llm_logger.info(f"Tool calling supported! Got {len(tool_calls)} tool calls")
+                return {
+                    "supports_tools": True,
+                    "message": f"Model supports tool calling. Received {len(tool_calls)} tool call(s).",
+                    "tool_calls": tool_calls
+                }
+            else:
+                content = message.get("content", "")
+                llm_logger.warning(f"No tool calls returned. Content: {content[:200]}")
+                return {
+                    "supports_tools": False,
+                    "message": "Model did not use tool calling. It may not support this feature.",
+                    "model_response": content[:200],
+                    "hint": "Try a model like granite, mistral-instruct, or llama with function calling support."
+                }
+                
+        except Exception as e:
+            llm_logger.error(f"Tool calling test failed: {e}", exc_info=True)
+            return {
+                "supports_tools": False,
+                "message": f"Tool calling test failed: {str(e)}",
+                "error": str(e)
+            }
 
 
 # Flask routes for LLM service
@@ -544,35 +819,105 @@ def register_llm_routes(app, db):
     @app.route('/api/llm/status', methods=['GET'])
     def llm_status():
         """Check LLM connection status."""
+        # Reload settings to get latest config
+        llm_service.reload_settings()
         return jsonify(llm_service.test_connection())
+    
+    @app.route('/api/llm/test-tools', methods=['GET'])
+    def test_tools():
+        """Test if the model supports tool calling."""
+        llm_service.reload_settings()
+        return jsonify(llm_service.test_tool_calling())
+    
+    @app.route('/api/llm/settings', methods=['GET'])
+    def get_llm_settings():
+        """Get current LLM settings."""
+        settings = load_llm_settings()
+        return jsonify({
+            "url": settings.get("url", DEFAULT_LMSTUDIO_URL),
+            "model": settings.get("model", DEFAULT_MODEL_NAME),
+            "defaults": {
+                "url": DEFAULT_LMSTUDIO_URL,
+                "model": DEFAULT_MODEL_NAME
+            }
+        })
+    
+    @app.route('/api/llm/settings', methods=['POST'])
+    def update_llm_settings():
+        """Update LLM settings."""
+        data = request.json
+        url = data.get('url', DEFAULT_LMSTUDIO_URL)
+        model = data.get('model', DEFAULT_MODEL_NAME)
+        
+        if save_llm_settings(url, model):
+            llm_service.reload_settings()
+            return jsonify({
+                "success": True,
+                "message": "Settings saved successfully",
+                "url": url,
+                "model": model
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to save settings"
+            }), 500
+    
+    @app.route('/api/llm/logs', methods=['GET'])
+    def get_llm_logs():
+        """Get recent LLM debug logs."""
+        try:
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    lines = f.readlines()
+                    # Return last 100 lines
+                    return jsonify({
+                        "logs": lines[-100:],
+                        "log_file": log_file
+                    })
+            return jsonify({"logs": [], "message": "No log file found"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     
     @app.route('/api/llm/process-note', methods=['POST'])
     def process_note():
         """Process a natural language note and extract garden data."""
-        data = request.json
-        note_text = data.get('note', '')
-        
-        if not note_text:
-            return jsonify({"error": "No note text provided"}), 400
-        
-        # Get existing plant names for context
-        plants = Plant.query.filter_by(status='active').all()
-        plant_names = [p.name for p in plants]
-        
-        # Extract data from note
-        result = llm_service.extract_garden_data(note_text, plant_names)
-        
-        # Save the note
-        note = GardenNote(
-            raw_text=note_text,
-            processed=result.get('success', False),
-            extracted_data=json.dumps(result.get('extracted_actions', []))
-        )
-        db.session.add(note)
-        db.session.commit()
-        
-        result['note_id'] = note.id
-        return jsonify(result)
+        try:
+            # Reload settings before processing
+            llm_service.reload_settings()
+            
+            data = request.json
+            note_text = data.get('note', '')
+            
+            if not note_text:
+                return jsonify({"error": "No note text provided"}), 400
+            
+            # Get existing plant names for context
+            plants = Plant.query.filter_by(status='active').all()
+            plant_names = [p.name for p in plants]
+            
+            # Extract data from note
+            result = llm_service.extract_garden_data(note_text, plant_names)
+            
+            # Save the note
+            note = GardenNote(
+                raw_text=note_text,
+                processed=result.get('success', False),
+                extracted_data=json.dumps(result.get('extracted_actions', []))
+            )
+            db.session.add(note)
+            db.session.commit()
+            
+            result['note_id'] = note.id
+            return jsonify(result)
+        except Exception as e:
+            llm_logger.error(f"Error in process_note: {type(e).__name__}: {str(e)}", exc_info=True)
+            return jsonify({
+                "success": False,
+                "error": f"Server error: {str(e)}",
+                "error_type": type(e).__name__,
+                "hint": "Check if LMStudio is running and the model is loaded. See llm_debug.log for details."
+            }), 500
     
     @app.route('/api/llm/apply-actions', methods=['POST'])
     def apply_actions():

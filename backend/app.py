@@ -584,6 +584,191 @@ def get_dashboard_stats():
     })
 
 
+# --- Leaderboard ---
+@app.route('/api/leaderboard', methods=['GET'])
+def get_leaderboard():
+    """Get leaderboard data with multiple ranking metrics."""
+    metric = request.args.get('metric', 'growth_rate')  # growth_rate, health, harvests
+    category = request.args.get('category', 'all')
+    plant_ids = request.args.get('plant_ids', '')  # Comma-separated plant IDs
+    
+    # Get plants
+    query = Plant.query.filter_by(status='active')
+    plants = query.all()
+    
+    # Filter by specific plant IDs if provided
+    if plant_ids:
+        try:
+            ids = [int(id) for id in plant_ids.split(',')]
+            plants = [p for p in plants if p.id in ids]
+        except:
+            pass
+    
+    # Filter by category (plant name/type)
+    if category and category != 'all':
+        plants = [p for p in plants if p.name.lower() == category.lower()]
+    
+    # Calculate metrics for each plant
+    leaderboard_data = []
+    for plant in plants:
+        plant_data = {
+            'id': plant.id,
+            'name': plant.name,
+            'display_name': f"{plant.name} {plant.variety or ''} #{plant.id}".strip(),
+            'variety': plant.variety,
+            'category': plant.name.lower(),  # Use plant name as category
+        }
+        
+        # Calculate growth rate (cm/day)
+        growth_logs = sorted(plant.growth_logs, key=lambda x: x.date)
+        if len(growth_logs) >= 2:
+            first_log = growth_logs[0]
+            last_log = growth_logs[-1]
+            days = (last_log.date - first_log.date).days or 1
+            height_diff = (last_log.height_cm or 0) - (first_log.height_cm or 0)
+            plant_data['growth_rate'] = round(height_diff / days, 3) if days > 0 else 0
+        else:
+            plant_data['growth_rate'] = 0
+        
+        # Calculate average health
+        health_ratings = [log.health_rating for log in plant.growth_logs if log.health_rating]
+        plant_data['health'] = round(sum(health_ratings) / len(health_ratings), 1) if health_ratings else 0
+        
+        # Count harvests
+        plant_data['harvests'] = len(plant.harvests)
+        
+        # Get latest height
+        plant_data['latest_height'] = growth_logs[-1].height_cm if growth_logs and growth_logs[-1].height_cm else 0
+        
+        leaderboard_data.append(plant_data)
+    
+    # Sort by selected metric
+    leaderboard_data.sort(key=lambda x: x.get(metric, 0), reverse=True)
+    
+    # Assign ranks
+    for i, plant in enumerate(leaderboard_data):
+        plant['rank'] = i + 1
+    
+    # Get unique categories
+    categories = list(set(p.name.lower() for p in Plant.query.filter_by(status='active').all()))
+    categories.sort()
+    
+    return jsonify({
+        'rankings': leaderboard_data,
+        'leaderboard': leaderboard_data,  # Keep for backward compatibility
+        'metric': metric,
+        'categories': categories
+    })
+
+
+# --- Weather API Proxy ---
+WEATHER_SETTINGS_FILE = os.path.join(basedir, 'weather_settings.json')
+
+def load_weather_api_key():
+    """Load weather API key from settings file."""
+    try:
+        if os.path.exists(WEATHER_SETTINGS_FILE):
+            with open(WEATHER_SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                return settings.get('api_key', '')
+    except:
+        pass
+    return ''
+
+def save_weather_api_key(api_key):
+    """Save weather API key to settings file."""
+    try:
+        with open(WEATHER_SETTINGS_FILE, 'w') as f:
+            json.dump({'api_key': api_key}, f)
+        return True
+    except:
+        return False
+
+@app.route('/api/weather/search', methods=['GET'])
+def search_weather():
+    """Fetch current weather by zipcode or city name using OpenWeatherMap API."""
+    import requests as http_requests
+    
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'error': 'Please provide a zipcode or city name'}), 400
+    
+    api_key = load_weather_api_key()
+    if not api_key:
+        return jsonify({
+            'error': 'Weather API key not configured',
+            'hint': 'Set your OpenWeatherMap API key in settings'
+        }), 400
+    
+    # Determine if it's a zipcode (US) or city name
+    if query.isdigit() and len(query) == 5:
+        # US zipcode
+        url = f"https://api.openweathermap.org/data/2.5/weather?zip={query},US&appid={api_key}&units=metric"
+    else:
+        # City name
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={query}&appid={api_key}&units=metric"
+    
+    try:
+        response = http_requests.get(url, timeout=10)
+        data = response.json()
+        
+        if response.status_code != 200:
+            return jsonify({
+                'error': data.get('message', 'Failed to fetch weather'),
+                'code': response.status_code
+            }), response.status_code
+        
+        # Transform the response
+        weather_data = {
+            'location': data.get('name', 'Unknown'),
+            'country': data.get('sys', {}).get('country', ''),
+            'temperature': data.get('main', {}).get('temp'),
+            'temperature_high': data.get('main', {}).get('temp_max'),
+            'temperature_low': data.get('main', {}).get('temp_min'),
+            'feels_like': data.get('main', {}).get('feels_like'),
+            'humidity': data.get('main', {}).get('humidity'),
+            'pressure': data.get('main', {}).get('pressure'),
+            'wind_speed': data.get('wind', {}).get('speed'),
+            'conditions': data.get('weather', [{}])[0].get('description', '').title(),
+            'icon': data.get('weather', [{}])[0].get('icon', ''),
+            'clouds': data.get('clouds', {}).get('all'),
+            'visibility': data.get('visibility'),
+            'sunrise': data.get('sys', {}).get('sunrise'),
+            'sunset': data.get('sys', {}).get('sunset')
+        }
+        
+        return jsonify(weather_data)
+        
+    except http_requests.exceptions.Timeout:
+        return jsonify({'error': 'Weather service timeout'}), 504
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/weather/settings', methods=['GET'])
+def get_weather_settings():
+    """Get weather API settings (key is masked)."""
+    api_key = load_weather_api_key()
+    return jsonify({
+        'has_api_key': bool(api_key),
+        'api_key_preview': api_key[:4] + '****' + api_key[-4:] if len(api_key) > 8 else ('****' if api_key else ''),
+        'service': 'OpenWeatherMap'
+    })
+
+@app.route('/api/weather/settings', methods=['POST'])
+def set_weather_settings():
+    """Set weather API key."""
+    data = request.json
+    api_key = data.get('api_key', '').strip()
+    
+    if not api_key:
+        return jsonify({'error': 'API key is required'}), 400
+    
+    if save_weather_api_key(api_key):
+        return jsonify({'success': True, 'message': 'API key saved'})
+    else:
+        return jsonify({'error': 'Failed to save API key'}), 500
+
+
 # --- Initialize Database ---
 def init_db():
     with app.app_context():

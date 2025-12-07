@@ -60,6 +60,7 @@ const elements = {
     llmSettingsClose: document.getElementById('llmSettingsClose'),
     llmUrlInput: document.getElementById('llmUrlInput'),
     llmModelInput: document.getElementById('llmModelInput'),
+    llmModelSelect: document.getElementById('llmModelSelect'),
     settingsStatusDot: document.getElementById('settingsStatusDot'),
     settingsStatusText: document.getElementById('settingsStatusText'),
     statusDetails: document.getElementById('statusDetails'),
@@ -381,6 +382,30 @@ async function checkLLMStatus() {
 }
 
 // ============== LLM Settings ==============
+
+// Helper function to refresh the models dropdown
+async function refreshModelsDropdown() {
+    if (!elements.llmModelSelect) return;
+    
+    const currentSelection = elements.llmModelSelect.value;
+    
+    try {
+        const modelsResp = await fetch(`${API_BASE}/llm/models`);
+        const modelsData = await modelsResp.json();
+        const models = modelsData.models || [];
+        
+        elements.llmModelSelect.innerHTML = '<option value="">-- Select a model --</option>' +
+            models.map(m => `<option value="${m}">${m}</option>`).join('');
+        
+        // Restore previous selection if still valid
+        if (currentSelection && models.includes(currentSelection)) {
+            elements.llmModelSelect.value = currentSelection;
+        }
+    } catch (err) {
+        console.debug('Failed to refresh LLM models:', err);
+    }
+}
+
 function setupLLMSettings() {
     // Open settings modal
     elements.llmSettingsBtn.addEventListener('click', (e) => {
@@ -410,18 +435,34 @@ function setupLLMSettings() {
     
     // View logs button
     elements.viewLogsBtn.addEventListener('click', toggleLogs);
+    
+    // Refresh models when URL changes (with debounce)
+    let urlDebounceTimer = null;
+    elements.llmUrlInput?.addEventListener('input', () => {
+        clearTimeout(urlDebounceTimer);
+        urlDebounceTimer = setTimeout(refreshModelsDropdown, 1000);
+    });
+    
+    // Sync model select with text input
+    elements.llmModelSelect?.addEventListener('change', (e) => {
+        if (e.target.value) {
+            elements.llmModelInput.value = e.target.value;
+        }
+    });
 }
 
 async function openLLMSettings() {
     elements.llmSettingsOverlay.classList.add('active');
     
     // Load current settings
+    let currentModel = '';
     try {
         const response = await fetch(`${API_BASE}/llm/settings`);
         const data = await response.json();
         
         elements.llmUrlInput.value = data.url || '';
         elements.llmModelInput.value = data.model || '';
+        currentModel = data.model || '';
         elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.placeholder = data.defaults?.model || 'model-name';
     } catch (error) {
@@ -430,6 +471,23 @@ async function openLLMSettings() {
     
     // Check current status
     await testLLMConnection();
+    // Populate model select with available models
+    try {
+        const modelsResp = await fetch(`${API_BASE}/llm/models`);
+        const modelsData = await modelsResp.json();
+        const models = modelsData.models || [];
+        if (elements.llmModelSelect) {
+            elements.llmModelSelect.innerHTML = '<option value="">-- Select a model --</option>' +
+                models.map(m => `<option value="${m}">${m}</option>`).join('');
+            // If loaded model is present, select it
+            if (currentModel) {
+                elements.llmModelSelect.value = currentModel;
+            }
+        }
+    } catch (err) {
+        // ignore if fetch fails
+        console.debug('Failed to load LLM models:', err);
+    }
 }
 
 function closeLLMSettings() {
@@ -519,7 +577,9 @@ async function testToolCalling() {
 
 async function saveLLMSettings() {
     const url = elements.llmUrlInput.value.trim();
-    const model = elements.llmModelInput.value.trim();
+    // Prefer custom text input if present, otherwise use selection
+    const selected = elements.llmModelSelect?.value || '';
+    const model = (elements.llmModelInput.value.trim() || selected).trim();
     
     if (!url) {
         showToast('Please enter an API URL', 'error');
@@ -542,6 +602,8 @@ async function saveLLMSettings() {
             showToast('Settings saved successfully!', 'success');
             // Test connection with new settings
             await testLLMConnection();
+            // Refresh models list with new URL
+            await refreshModelsDropdown();
         } else {
             showToast(data.message || 'Failed to save settings', 'error');
         }

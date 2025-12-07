@@ -8,6 +8,7 @@ from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
 import json
 import os
+from typing import Dict
 import requests
 import qrcode
 from qrcode.constants import ERROR_CORRECT_L
@@ -271,6 +272,36 @@ def find_plant_by_name(name):
     return None
 
 
+# ============== LLM Settings Helpers ==============
+LLM_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+
+def load_llm_settings() -> Dict[str, str]:
+    """Load LLM settings from file or return defaults."""
+    defaults = { 'url': LMSTUDIO_URL, 'model': MODEL_NAME }
+    try:
+        if os.path.exists(LLM_SETTINGS_FILE):
+            with open(LLM_SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                return { 'url': settings.get('url', LMSTUDIO_URL), 'model': settings.get('model', MODEL_NAME) }
+    except Exception as e:
+        print('Failed to load LLM settings:', e)
+    return defaults
+
+def save_llm_settings(url: str, model: str) -> bool:
+    try:
+        settings = { 'url': url, 'model': model }
+        with open(LLM_SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+        # Update module-level vars
+        global LMSTUDIO_URL, MODEL_NAME
+        LMSTUDIO_URL = url
+        MODEL_NAME = model
+        return True
+    except Exception as e:
+        print('Failed to save LLM settings:', e)
+        return False
+
+
 # ============== Static Files ==============
 
 @app.route('/')
@@ -284,10 +315,53 @@ def serve_index():
 def llm_status():
     """Check if LMStudio is running"""
     try:
-        response = requests.get("http://localhost:1234/v1/models", timeout=2)
-        return jsonify({'connected': response.status_code == 200})
-    except:
-        return jsonify({'connected': False})
+        settings = load_llm_settings()
+        # Probe models endpoint to determine connectivity
+        base_url = settings.get('url') or LMSTUDIO_URL
+        models_url = base_url.replace('/chat/completions', '/models') if '/chat/completions' in base_url else base_url.rstrip('/') + '/models'
+        resp = requests.get(models_url, timeout=2)
+        connected = resp.status_code == 200
+        return jsonify({'connected': connected, 'url': settings.get('url'), 'model': settings.get('model')})
+    except Exception:
+        settings = load_llm_settings()
+        return jsonify({'connected': False, 'url': settings.get('url'), 'model': settings.get('model')})
+
+
+@app.route('/api/llm/models', methods=['GET'])
+def llm_models():
+    """Return a list of models available from LMStudio/proxy"""
+    try:
+        # Load settings to allow custom LMStudio URL
+        settings = load_llm_settings()
+        base_url = settings.get('url') or LMSTUDIO_URL
+        # Models endpoint is typically /v1/models (OpenAI-compatible)
+        models_url = base_url.replace('/chat/completions', '/models') if '/chat/completions' in base_url else base_url.rstrip('/') + '/models'
+        resp = requests.get(models_url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            # OpenAI-compatible format: { "object": "list", "data": [{"id": "model-name", ...}] }
+            if isinstance(data, dict) and 'data' in data:
+                # Standard OpenAI/LMStudio format
+                model_names = [m.get('id') for m in data.get('data', []) if m.get('id')]
+                return jsonify({'models': model_names})
+            elif isinstance(data, dict):
+                # Fallback: dict with model names as keys
+                model_names = list(data.keys())
+                return jsonify({'models': model_names})
+            elif isinstance(data, list):
+                # List of model objects or strings
+                model_names = []
+                for item in data:
+                    if isinstance(item, dict) and 'id' in item:
+                        model_names.append(item['id'])
+                    elif isinstance(item, str):
+                        model_names.append(item)
+                return jsonify({'models': model_names})
+            return jsonify({'models': []})
+        else:
+            return jsonify({'error': 'Failed to fetch models', 'code': resp.status_code}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/llm/process-note', methods=['POST'])
@@ -387,6 +461,26 @@ Today's date is """ + datetime.now().strftime('%Y-%m-%d')
         return jsonify({'error': 'LLM request timed out'}), 504
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/llm/settings', methods=['GET'])
+def get_llm_settings():
+    settings = load_llm_settings()
+    return jsonify({
+        'url': settings.get('url', LMSTUDIO_URL),
+        'model': settings.get('model', MODEL_NAME),
+        'defaults': {'url': LMSTUDIO_URL, 'model': MODEL_NAME}
+    })
+
+
+@app.route('/api/llm/settings', methods=['POST'])
+def update_llm_settings():
+    data = request.json or {}
+    url = data.get('url', LMSTUDIO_URL)
+    model = data.get('model', MODEL_NAME)
+    if save_llm_settings(url, model):
+        return jsonify({'success': True, 'url': url, 'model': model})
+    return jsonify({'success': False, 'message': 'Failed to save settings'}), 500
 
 
 @app.route('/api/llm/apply-actions', methods=['POST'])
@@ -512,6 +606,82 @@ def get_plants():
     status = request.args.get('status')
     plants = list_plants(status)
     return jsonify(plants)
+
+
+@app.route('/api/leaderboard', methods=['GET'])
+def get_leaderboard():
+    """Get leaderboard data similar to SQL backend for MD-based storage"""
+    metric = request.args.get('metric', 'growth_rate')
+    category = request.args.get('category', 'all')
+    plant_ids = request.args.get('plant_ids', '')
+
+    # Get plants (MD storage format)
+    if category == 'all':
+        plants_list = list_plants('active')
+    else:
+        plants_list = [p for p in list_plants('active') if p.get('name', '').lower() == category.lower()]
+
+    # Filter by IDs if provided
+    if plant_ids:
+        ids = [s.strip() for s in plant_ids.split(',') if s.strip()]
+        plants_list = [p for p in plants_list if p.get('id') in ids]
+
+    leaderboard_data = []
+    for p in plants_list:
+        plant_id = p.get('id')
+        growth_logs = get_growth_logs(plant_id) or []
+        # growth_logs are sorted desc in md_service -> we want ascending by date
+        growth_sorted = sorted(growth_logs, key=lambda x: x.get('date', ''))
+        health_values = [g.get('health_rating') for g in growth_sorted if g.get('health_rating') is not None]
+
+        # Growth rate calculation
+        if len(growth_sorted) >= 2:
+            try:
+                first = growth_sorted[0]
+                last = growth_sorted[-1]
+                first_date = datetime.fromisoformat(first.get('date'))
+                last_date = datetime.fromisoformat(last.get('date'))
+                days = (last_date - first_date).days or 1
+                height_diff = (last.get('height_cm') or 0) - (first.get('height_cm') or 0)
+                growth_rate = round(height_diff / days, 3) if days > 0 else 0
+            except Exception:
+                growth_rate = 0
+        else:
+            growth_rate = 0
+
+        # Average health
+        health = round(sum(health_values) / len(health_values), 1) if health_values else 0
+
+        # Harvests count
+        harvests = get_harvests(plant_id) or []
+        harvest_count = len(harvests)
+
+        latest_height = 0
+        if growth_sorted:
+            latest_height = growth_sorted[-1].get('height_cm') or 0
+
+        leaderboard_data.append({
+            'id': plant_id,
+            'name': p.get('name'),
+            'display_name': p.get('display_name', p.get('name')),
+            'variety': p.get('variety'),
+            'category': p.get('name', '').lower(),
+            'growth_rate': growth_rate,
+            'health': health,
+            'harvests': harvest_count,
+            'latest_height': latest_height
+        })
+
+    # Sort by metric
+    leaderboard_data.sort(key=lambda x: x.get(metric, 0), reverse=True)
+    # Assign rank
+    for i, item in enumerate(leaderboard_data):
+        item['rank'] = i + 1
+
+    # Categories (unique names)
+    categories = sorted(list(set([p.get('name', '').lower() for p in list_plants('active')])))
+
+    return jsonify({'rankings': leaderboard_data, 'leaderboard': leaderboard_data, 'metric': metric, 'categories': categories})
 
 
 @app.route('/api/plants', methods=['POST'])

@@ -1629,6 +1629,67 @@ body {
     font-family: inherit;
 }
 
+.form-group input[type="range"] {
+    padding: 0;
+    height: 6px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+}
+
+.form-group input[type="range"]::-webkit-slider-track {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+}
+
+.form-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    background: var(--primary);
+    border-radius: 50%;
+    cursor: pointer;
+    margin-top: -6px;
+}
+
+.form-group input[type="range"]::-moz-range-track {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+}
+
+.form-group input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--primary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.form-group input[type="range"]:focus {
+    outline: none;
+    border: none;
+}
+
+.form-group input[type="range"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.form-group input[type="range"]:focus::-moz-range-thumb {
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.form-group label span {
+    font-weight: 600;
+    color: var(--primary);
+}
+
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {

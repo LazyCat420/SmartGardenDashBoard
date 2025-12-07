@@ -29,8 +29,11 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_se
 # Default LMStudio API configuration
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"
+DEFAULT_CONTEXT_LENGTH = 8192
+DEFAULT_GPU_LAYERS = 35
+DEFAULT_CPU_THREADS = 8
 
-def load_llm_settings() -> Dict[str, str]:
+def load_llm_settings() -> Dict[str, Any]:
     """Load LLM settings from file or return defaults."""
     try:
         if os.path.exists(SETTINGS_FILE):
@@ -43,13 +46,27 @@ def load_llm_settings() -> Dict[str, str]:
     
     return {
         "url": DEFAULT_LMSTUDIO_URL,
-        "model": DEFAULT_MODEL_NAME
+        "model": DEFAULT_MODEL_NAME,
+        "context_length": DEFAULT_CONTEXT_LENGTH,
+        "gpu_layers": DEFAULT_GPU_LAYERS,
+        "cpu_threads": DEFAULT_CPU_THREADS
     }
 
-def save_llm_settings(url: str, model: str) -> bool:
+def save_llm_settings(url: str, model: str, context_length: int = None, 
+                      gpu_layers: int = None, cpu_threads: int = None) -> bool:
     """Save LLM settings to file."""
     try:
-        settings = {"url": url, "model": model}
+        settings = {
+            "url": url, 
+            "model": model
+        }
+        if context_length is not None:
+            settings["context_length"] = context_length
+        if gpu_layers is not None:
+            settings["gpu_layers"] = gpu_layers
+        if cpu_threads is not None:
+            settings["cpu_threads"] = cpu_threads
+        
         with open(SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=2)
         llm_logger.info(f"Saved settings: {settings}")
@@ -62,6 +79,9 @@ def save_llm_settings(url: str, model: str) -> bool:
 _settings = load_llm_settings()
 LMSTUDIO_URL = _settings.get("url", DEFAULT_LMSTUDIO_URL)
 MODEL_NAME = _settings.get("model", DEFAULT_MODEL_NAME)
+CONTEXT_LENGTH = _settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
+GPU_LAYERS = _settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
+CPU_THREADS = _settings.get("cpu_threads", DEFAULT_CPU_THREADS)
 
 
 # ============== Tool Definitions ==============
@@ -449,19 +469,26 @@ Extract all relevant information and make the appropriate function calls."""
 
 
 class LLMService:
-    def __init__(self, base_url: str = None, model: str = None):
+    def __init__(self, base_url: str = None, model: str = None, context_length: int = None, 
+                 gpu_layers: int = None, cpu_threads: int = None):
         # Always load fresh settings
         settings = load_llm_settings()
         self.base_url = base_url or settings.get("url", DEFAULT_LMSTUDIO_URL)
         self.model = model or settings.get("model", DEFAULT_MODEL_NAME)
-        llm_logger.info(f"LLMService initialized with URL: {self.base_url}, Model: {self.model}")
+        self.context_length = context_length if context_length is not None else settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
+        self.gpu_layers = gpu_layers if gpu_layers is not None else settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
+        self.cpu_threads = cpu_threads if cpu_threads is not None else settings.get("cpu_threads", DEFAULT_CPU_THREADS)
+        llm_logger.info(f"LLMService initialized - URL: {self.base_url}, Model: {self.model}, Context: {self.context_length}, GPU Layers: {self.gpu_layers}, CPU Threads: {self.cpu_threads}")
     
     def reload_settings(self):
         """Reload settings from file."""
         settings = load_llm_settings()
         self.base_url = settings.get("url", DEFAULT_LMSTUDIO_URL)
         self.model = settings.get("model", DEFAULT_MODEL_NAME)
-        llm_logger.info(f"Settings reloaded - URL: {self.base_url}, Model: {self.model}")
+        self.context_length = settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
+        self.gpu_layers = settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
+        self.cpu_threads = settings.get("cpu_threads", DEFAULT_CPU_THREADS)
+        llm_logger.info(f"Settings reloaded - URL: {self.base_url}, Model: {self.model}, Context: {self.context_length}, GPU Layers: {self.gpu_layers}, CPU Threads: {self.cpu_threads}")
     
     def extract_garden_data(self, note_text: str, existing_plants: List[str] = None) -> Dict[str, Any]:
         """
@@ -491,7 +518,10 @@ class LLMService:
             "tools": GARDEN_TOOLS,
             "tool_choice": "auto",
             "temperature": 0.3,
-            "max_tokens": 2000
+            "max_tokens": 2000,
+            "n_ctx": self.context_length,
+            "n_gpu_layers": self.gpu_layers,
+            "n_threads": self.cpu_threads
         }
         
         llm_logger.debug(f"=== LLM REQUEST ===")

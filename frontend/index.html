@@ -544,6 +544,25 @@
                     </div>
                 </div>
                 
+                <div class="settings-section">
+                    <h4>Model Parameters</h4>
+                    <div class="form-group">
+                        <label for="contextLengthInput">Context Length: <span id="contextLengthValue">8192</span></label>
+                        <input type="range" id="contextLengthInput" min="512" max="32768" step="512" value="8192">
+                        <small class="form-hint">Maximum context window size (512-32768 tokens)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="gpuLayersInput">GPU Layers: <span id="gpuLayersValue">35</span></label>
+                        <input type="range" id="gpuLayersInput" min="0" max="40" step="1" value="35">
+                        <small class="form-hint">Number of layers to offload to GPU (0-40)</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="cpuThreadsInput">CPU Threads: <span id="cpuThreadsValue">8</span></label>
+                        <input type="range" id="cpuThreadsInput" min="1" max="12" step="1" value="8">
+                        <small class="form-hint">Number of CPU threads to use (1-12)</small>
+                    </div>
+                </div>
+                
                 <div class="settings-actions">
                     <button class="btn btn-secondary" id="resetSettingsBtn">Reset to Defaults</button>
                     <button class="btn btn-secondary" id="testConnectionBtn">🔌 Test Connection</button>

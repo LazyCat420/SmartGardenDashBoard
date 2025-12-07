@@ -1176,6 +1176,93 @@ def llm_status():
         return jsonify({"connected": False, "message": "Cannot connect to LMStudio"})
 
 
+@app.route('/api/llm/settings', methods=['GET'])
+def get_llm_settings():
+    """Get current LLM settings."""
+    try:
+        settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                settings = json.load(f)
+        else:
+            settings = {
+                "url": "http://localhost:1234/v1/chat/completions",
+                "model": "ibm-granite/granite-3.3-8b-instruct",
+                "context_length": 8192,
+                "gpu_layers": 35,
+                "cpu_threads": 8
+            }
+        
+        return jsonify({
+            **settings,
+            "defaults": {
+                "url": "http://localhost:1234/v1/chat/completions",
+                "model": "ibm-granite/granite-3.3-8b-instruct",
+                "context_length": 8192,
+                "gpu_layers": 35,
+                "cpu_threads": 8
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/llm/settings', methods=['POST'])
+def save_llm_settings():
+    """Save LLM settings."""
+    try:
+        data = request.json
+        settings = {
+            "url": data.get("url", "http://localhost:1234/v1/chat/completions"),
+            "model": data.get("model", "ibm-granite/granite-3.3-8b-instruct"),
+            "context_length": data.get("context_length", 8192),
+            "gpu_layers": data.get("gpu_layers", 35),
+            "cpu_threads": data.get("cpu_threads", 8)
+        }
+        
+        settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+        with open(settings_file, 'w') as f:
+            json.dump(settings, f, indent=2)
+        
+        # Reload global settings
+        global LMSTUDIO_URL, MODEL_NAME
+        LMSTUDIO_URL = settings["url"]
+        MODEL_NAME = settings["model"]
+        
+        return jsonify({"success": True, "message": "Settings saved successfully"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/llm/models', methods=['GET'])
+def get_llm_models():
+    """Get available models from LMStudio."""
+    try:
+        settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                settings = json.load(f)
+                base_url = settings.get("url", "http://localhost:1234/v1/chat/completions")
+        else:
+            base_url = "http://localhost:1234/v1/chat/completions"
+        
+        # Extract the base URL for the models endpoint
+        models_url = base_url.replace("/v1/chat/completions", "/v1/models")
+        
+        response = requests.get(models_url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract model IDs from the response
+        models = []
+        if "data" in data:
+            models = [model.get("id") for model in data["data"] if model.get("id")]
+        
+        return jsonify({"models": models})
+    except Exception as e:
+        return jsonify({"models": [], "error": str(e)})
+
+
 @app.route('/api/llm/process-note', methods=['POST'])
 def process_note():
     data = request.json

@@ -1,4 +1,4 @@
 {
   "url": "http://10.0.0.231:1234/v1/chat/completions",
-  "model": "granite-3.2-8b-instruct"
+  "model": "google/gemma-3n-e4b"
 }

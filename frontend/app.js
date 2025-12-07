@@ -61,6 +61,12 @@ const elements = {
     llmUrlInput: document.getElementById('llmUrlInput'),
     llmModelInput: document.getElementById('llmModelInput'),
     llmModelSelect: document.getElementById('llmModelSelect'),
+    contextLengthInput: document.getElementById('contextLengthInput'),
+    contextLengthValue: document.getElementById('contextLengthValue'),
+    gpuLayersInput: document.getElementById('gpuLayersInput'),
+    gpuLayersValue: document.getElementById('gpuLayersValue'),
+    cpuThreadsInput: document.getElementById('cpuThreadsInput'),
+    cpuThreadsValue: document.getElementById('cpuThreadsValue'),
     settingsStatusDot: document.getElementById('settingsStatusDot'),
     settingsStatusText: document.getElementById('settingsStatusText'),
     statusDetails: document.getElementById('statusDetails'),
@@ -449,6 +455,25 @@ function setupLLMSettings() {
             elements.llmModelInput.value = e.target.value;
         }
     });
+    
+    // Update slider value displays
+    if (elements.contextLengthInput) {
+        elements.contextLengthInput.addEventListener('input', (e) => {
+            elements.contextLengthValue.textContent = e.target.value;
+        });
+    }
+    
+    if (elements.gpuLayersInput) {
+        elements.gpuLayersInput.addEventListener('input', (e) => {
+            elements.gpuLayersValue.textContent = e.target.value;
+        });
+    }
+    
+    if (elements.cpuThreadsInput) {
+        elements.cpuThreadsInput.addEventListener('input', (e) => {
+            elements.cpuThreadsValue.textContent = e.target.value;
+        });
+    }
 }
 
 async function openLLMSettings() {
@@ -465,6 +490,25 @@ async function openLLMSettings() {
         currentModel = data.model || '';
         elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.placeholder = data.defaults?.model || 'model-name';
+        
+        // Load new settings
+        if (elements.contextLengthInput) {
+            const contextLength = data.context_length || 8192;
+            elements.contextLengthInput.value = contextLength;
+            elements.contextLengthValue.textContent = contextLength;
+        }
+        
+        if (elements.gpuLayersInput) {
+            const gpuLayers = data.gpu_layers || 35;
+            elements.gpuLayersInput.value = gpuLayers;
+            elements.gpuLayersValue.textContent = gpuLayers;
+        }
+        
+        if (elements.cpuThreadsInput) {
+            const cpuThreads = data.cpu_threads || 8;
+            elements.cpuThreadsInput.value = cpuThreads;
+            elements.cpuThreadsValue.textContent = cpuThreads;
+        }
     } catch (error) {
         showToast('Failed to load settings', 'error');
     }
@@ -581,6 +625,11 @@ async function saveLLMSettings() {
     const selected = elements.llmModelSelect?.value || '';
     const model = (elements.llmModelInput.value.trim() || selected).trim();
     
+    // Get new settings values
+    const context_length = parseInt(elements.contextLengthInput?.value || 8192);
+    const gpu_layers = parseInt(elements.gpuLayersInput?.value || 35);
+    const cpu_threads = parseInt(elements.cpuThreadsInput?.value || 8);
+    
     if (!url) {
         showToast('Please enter an API URL', 'error');
         return;
@@ -593,7 +642,13 @@ async function saveLLMSettings() {
         const response = await fetch(`${API_BASE}/llm/settings`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, model })
+            body: JSON.stringify({ 
+                url, 
+                model,
+                context_length,
+                gpu_layers,
+                cpu_threads
+            })
         });
         
         const data = await response.json();
@@ -622,6 +677,26 @@ async function resetLLMSettings() {
         
         elements.llmUrlInput.value = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.value = data.defaults?.model || 'ibm-granite/granite-3.3-8b-instruct';
+        
+        // Reset new settings
+        const defaultContextLength = data.defaults?.context_length || 8192;
+        const defaultGpuLayers = data.defaults?.gpu_layers || 35;
+        const defaultCpuThreads = data.defaults?.cpu_threads || 8;
+        
+        if (elements.contextLengthInput) {
+            elements.contextLengthInput.value = defaultContextLength;
+            elements.contextLengthValue.textContent = defaultContextLength;
+        }
+        
+        if (elements.gpuLayersInput) {
+            elements.gpuLayersInput.value = defaultGpuLayers;
+            elements.gpuLayersValue.textContent = defaultGpuLayers;
+        }
+        
+        if (elements.cpuThreadsInput) {
+            elements.cpuThreadsInput.value = defaultCpuThreads;
+            elements.cpuThreadsValue.textContent = defaultCpuThreads;
+        }
         
         showToast('Settings reset to defaults (not saved yet)', 'info');
     } catch (error) {

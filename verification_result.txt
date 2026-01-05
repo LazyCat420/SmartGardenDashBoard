@@ -1,0 +1,3 @@
+Loaded URL: http://test-url:1234/v1/chat/completions
+Loaded Model: test-model-v1
+Result: SUCCESS

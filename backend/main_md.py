@@ -298,8 +298,16 @@ def save_llm_settings(url: str, model: str) -> bool:
         MODEL_NAME = model
         return True
     except Exception as e:
-        print('Failed to save LLM settings:', e)
         return False
+
+# Initialize settings from file on startup
+try:
+    _startup_settings = load_llm_settings()
+    LMSTUDIO_URL = _startup_settings.get('url', LMSTUDIO_URL)
+    MODEL_NAME = _startup_settings.get('model', MODEL_NAME)
+    print(f"Startup: Loaded LLM settings - URL: {LMSTUDIO_URL}, Model: {MODEL_NAME}")
+except Exception as e:
+    print(f"Startup: Failed to load LLM settings: {e}")
 
 
 # ============== Static Files ==============

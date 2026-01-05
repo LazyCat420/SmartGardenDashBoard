@@ -242,6 +242,19 @@ class GardenNote(db.Model):
 LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"
 
+# Try to load settings from file
+# Try to load settings from file - REVERTED
+# try:
+#     settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+#     if os.path.exists(settings_file):
+#         with open(settings_file, 'r') as f:
+#             settings = json.load(f)
+#             LMSTUDIO_URL = settings.get("url", LMSTUDIO_URL)
+#             MODEL_NAME = settings.get("model", MODEL_NAME)
+#             print(f"Loaded LLM settings: URL={LMSTUDIO_URL}, Model={MODEL_NAME}")
+# except Exception as e:
+#     print(f"Error loading LLM settings: {e}")
+
 GARDEN_TOOLS = [
     {
         "type": "function",

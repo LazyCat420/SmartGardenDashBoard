@@ -40,6 +40,8 @@ from md_service import (
     create_product, get_product, list_products, update_product, delete_product,
     get_budget_summary, get_cost_per_plant,
     find_product_by_name,
+    # Common
+    find_best_match,
     # Charts
     get_growth_chart_data, get_watering_chart_data, get_budget_chart_data
 )
@@ -255,34 +257,26 @@ GARDEN_TOOLS = [
 # ============== Helper Functions ==============
 
 def find_plant_by_name(name):
-    """Find a plant by name (fuzzy match)"""
+    """Find a plant by name (fuzzy match) using robust matcher"""
+    if not name:
+        return None
+    
     plants = list_plants()
+    # Use the robust jaccard/partial matcher from md_service
+    match = find_best_match(name, plants, name_key='name', threshold=0.3)
+    if match:
+        print(f"DEBUG: find_plant_by_name('{name}') matches '{match['name']}' ({match['id']})")
+        return match
+    
+    # Fallback: specific common garden substitutions if md_service fails
     name_lower = name.lower()
-    
-    # Try exact match first
-    for p in plants:
-        if p.get('name', '').lower() == name_lower:
-            return p
-        if p.get('display_name', '').lower() == name_lower:
-            return p
-    
-    # Try partial match (search term inside plant name)
-    for p in plants:
-        if name_lower in p.get('name', '').lower():
-            return p
-        if name_lower in p.get('display_name', '').lower():
-            return p
-
-    # Try reverse partial match (plant name inside search term)
-    # This helps when the user says "Water the roma tomato" and the plant is "Roma"
     for p in plants:
         p_name = p.get('name', '').lower()
-        p_display = p.get('display_name', '').lower()
-        if p_name and p_name in name_lower:
-            return p
-        if p_display and p_display in name_lower:
-            return p
-    
+        if p_name in name_lower or name_lower in p_name:
+             print(f"DEBUG: find_plant_by_name fallback ('{name}') matches '{p['name']}'")
+             return p
+             
+    print(f"DEBUG: find_plant_by_name('{name}') returned None")
     return None
 
 
@@ -583,9 +577,13 @@ def apply_actions():
                     plant = create_plant(plant_data)
                     results.append({'action': action_name, 'success': plant is not None})
                 
+
             elif action_name == 'log_watering':
-                plant = find_plant_by_name(params.get('plant_name', ''))
+                p_name = params.get('plant_name', '')
+                print(f"DEBUG: log_watering for '{p_name}'")
+                plant = find_plant_by_name(p_name)
                 if plant:
+                    print(f"DEBUG: Found plant {plant['name']} ({plant['id']})")
                     # Auto-fill recipe data if recipe_name is provided
                     recipe_name = params.get('recipe_name') or params.get('method', '')
                     if recipe_name:
@@ -602,10 +600,12 @@ def apply_actions():
                                 params['method'] = recipe.get('name')
                     
                     log = create_watering(plant['id'], params)
+                    print(f"DEBUG: create_watering result: {log is not None}")
                     results.append({'action': action_name, 'success': log is not None, 
                                    'recipe_matched': params.get('recipe_name') if recipe_name else None})
                 else:
-                    results.append({'action': action_name, 'success': False, 'error': 'Plant not found'})
+                    print(f"DEBUG: Plant NOT FOUND for '{p_name}'")
+                    results.append({'action': action_name, 'success': False, 'error': f'Plant not found for {p_name}'})
                 
             elif action_name == 'log_fertilization':
                 plant = find_plant_by_name(params.get('plant_name', ''))
@@ -623,13 +623,19 @@ def apply_actions():
                 else:
                     results.append({'action': action_name, 'success': False, 'error': 'Plant not found'})
                 
+
             elif action_name == 'log_growth':
-                plant = find_plant_by_name(params.get('plant_name', ''))
+                p_name = params.get('plant_name', '')
+                print(f"DEBUG: log_growth for '{p_name}'")
+                plant = find_plant_by_name(p_name)
                 if plant:
+                    print(f"DEBUG: Found plant {plant['name']} ({plant['id']})")
                     log = create_growth_log(plant['id'], params)
+                    print(f"DEBUG: create_growth_log result: {log is not None}")
                     results.append({'action': action_name, 'success': log is not None})
                 else:
-                    results.append({'action': action_name, 'success': False, 'error': 'Plant not found'})
+                    print(f"DEBUG: Plant NOT FOUND for '{p_name}'")
+                    results.append({'action': action_name, 'success': False, 'error': f'Plant not found for {p_name}'})
                 
             elif action_name == 'report_pest_issue':
                 plant = find_plant_by_name(params.get('plant_name', ''))
@@ -666,6 +672,15 @@ def apply_actions():
             results.append({'action': action_name, 'success': False, 'error': str(e)})
     
     return jsonify({'results': results})
+
+
+@app.route('/api/debug/find-plant', methods=['GET'])
+def debug_find_plant():
+    name = request.args.get('name', '')
+    plant = find_plant_by_name(name)
+    if plant:
+        return jsonify({'found': True, 'plant': plant})
+    return jsonify({'found': False, 'searched_for': name})
 
 
 # ============== Plant Endpoints ==============

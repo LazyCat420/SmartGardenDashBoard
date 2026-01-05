@@ -1079,6 +1079,64 @@ def add_weather():
     return jsonify({'error': 'Failed to create weather log'}), 500
 
 
+@app.route('/api/weather/search', methods=['GET'])
+def search_weather():
+    """
+    Search for current weather using wttr.in
+    Query params: q (city name or zipcode)
+    """
+    query = request.args.get('q')
+    if not query:
+        return jsonify({'error': 'Query parameter "q" is required'}), 400
+
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (SmartGardenDashboard/1.0)'
+        }
+        
+        response = requests.get(f"https://wttr.in/{query}?format=j1", headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Transform wttr.in data to expected frontend format
+            try:
+                current = data['current_condition'][0]
+                area = data['nearest_area'][0]
+                forecast = data['weather'][0]
+                
+                result = {
+                    'location': area['areaName'][0]['value'],
+                    'country': area['country'][0]['value'],
+                    'conditions': current['weatherDesc'][0]['value'],
+                    'temperature': float(current['temp_C']),
+                    'temperature_F': float(current['temp_F']),
+                    'temperature_high': float(forecast['maxtempC']),
+                    'temperature_high_F': float(forecast['maxtempF']),
+                    'temperature_low': float(forecast['mintempC']),
+                    'temperature_low_F': float(forecast['mintempF']),
+                    'humidity': int(current['humidity']),
+                    'wind_speed': current['windspeedKmph'], # Keep as string or float, frontend expects string/number
+                    'icon': '' # wttr.in doesn't provide openweathermap icons easily, leave empty or map if needed
+                }
+                return jsonify(result)
+            except (KeyError, IndexError, ValueError) as e:
+                print(f"Error parsing weather data: {e}")
+                return jsonify({'error': 'Failed to parse weather data'}), 502
+                
+        elif response.status_code == 404:
+            return jsonify({'error': 'Location not found'}), 404
+        else:
+            return jsonify({'error': f'Weather provider returned {response.status_code}'}), 502
+            
+    except requests.RequestException as e:
+        print(f"Weather search error: {e}")
+        return jsonify({'error': 'Failed to contact weather provider'}), 503
+    except Exception as e:
+        print(f"Unexpected weather error: {e}")
+        return jsonify({'error': 'Internal server error processing weather'}), 500
+
+
 # ============== Notes Endpoints ==============
 
 @app.route('/api/notes', methods=['GET'])

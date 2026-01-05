@@ -13,6 +13,8 @@ let tasks = [];
 let harvests = [];
 let notes = [];
 let weather = [];
+let weatherUnit = 'C';
+let lastWeatherSearchResult = null;
 let recipes = [];
 let products = [];
 let healthChart = null;
@@ -51,7 +53,7 @@ const elements = {
     pages: document.querySelectorAll('.page'),
     pageTitle: document.getElementById('pageTitle'),
     currentDate: document.getElementById('currentDate'),
-    
+
     // LLM Status
     llmStatusDot: document.getElementById('llmStatusDot'),
     llmStatusText: document.getElementById('llmStatusText'),
@@ -77,20 +79,20 @@ const elements = {
     viewLogsBtn: document.getElementById('viewLogsBtn'),
     logsContainer: document.getElementById('logsContainer'),
     logsContent: document.getElementById('logsContent'),
-    
+
     // Note Input
     noteInput: document.getElementById('noteInput'),
     processNoteBtn: document.getElementById('processNoteBtn'),
     clearNoteBtn: document.getElementById('clearNoteBtn'),
     extractedActions: document.getElementById('extractedActions'),
     quickNoteBtn: document.getElementById('quickNoteBtn'),
-    
+
     // Stats
     statPlants: document.getElementById('statPlants'),
     statTasks: document.getElementById('statTasks'),
     statHarvests: document.getElementById('statHarvests'),
     statPests: document.getElementById('statPests'),
-    
+
     // Lists
     upcomingTasks: document.getElementById('upcomingTasks'),
     plantsList: document.getElementById('plantsList'),
@@ -104,55 +106,59 @@ const elements = {
     weatherSearchInput: document.getElementById('weatherSearchInput'),
     fetchWeatherBtn: document.getElementById('fetchWeatherBtn'),
     weatherSearchResult: document.getElementById('weatherSearchResult'),
-    
+
     // Leaderboard
     leaderboardMetric: document.getElementById('leaderboardMetric'),
     leaderboardCategory: document.getElementById('leaderboardCategory'),
+
+    // Weather
+    weatherUnitToggle: document.getElementById('weatherUnitToggle'),
+
     selectPlantsBtn: document.getElementById('selectPlantsBtn'),
     selectedPlantsCount: document.getElementById('selectedPlantsCount'),
     leaderboardChartTitle: document.getElementById('leaderboardChartTitle'),
     leaderboardRankings: document.getElementById('leaderboardRankings'),
     recipesList: document.getElementById('recipesList'),
     productsList: document.getElementById('productsList'),
-    
+
     // Plants View Controls
     viewToggleBtns: document.querySelectorAll('.view-btn'),
     plantSearchInput: document.getElementById('plantSearchInput'),
-    
+
     // Budget Summary
     totalSpent: document.getElementById('totalSpent'),
     totalProducts: document.getElementById('totalProducts'),
     activeRecipes: document.getElementById('activeRecipes'),
-    
+
     // Chart Filters
     growthPlantFilter: document.getElementById('growthPlantFilter'),
     wateringPlantFilter: document.getElementById('wateringPlantFilter'),
-    
+
     // Filters
     plantStatusFilter: document.getElementById('plantStatusFilter'),
     taskFilter: document.getElementById('taskFilter'),
-    
+
     // Buttons
     addPlantBtn: document.getElementById('addPlantBtn'),
     addTaskBtn: document.getElementById('addTaskBtn'),
     addWeatherBtn: document.getElementById('addWeatherBtn'),
     addRecipeBtn: document.getElementById('addRecipeBtn'),
     addProductBtn: document.getElementById('addProductBtn'),
-    
+
     // Modal
     modalOverlay: document.getElementById('modalOverlay'),
     modal: document.getElementById('modal'),
     modalTitle: document.getElementById('modalTitle'),
     modalBody: document.getElementById('modalBody'),
     modalClose: document.getElementById('modalClose'),
-    
+
     // Toast
     toastContainer: document.getElementById('toastContainer'),
-    
+
     // Mobile Menu
     mobileMenuToggle: document.getElementById('mobileMenuToggle'),
     sidebar: document.querySelector('.sidebar'),
-    
+
     // Scanner
     scannerTabs: document.querySelectorAll('.scanner-tab'),
     scanMode: document.getElementById('scanMode'),
@@ -195,7 +201,7 @@ async function initApp() {
         month: 'long',
         day: 'numeric'
     });
-    
+
     // Setup event listeners
     setupNavigation();
     setupNoteInput();
@@ -207,13 +213,13 @@ async function initApp() {
     setupLLMSettings();
     setupWeatherSearch();
     setupLeaderboard();
-    
+
     // Check LLM status
     checkLLMStatus();
-    
+
     // Load initial data
     await loadDashboardData();
-    
+
     // Handle QR code redirect - check URL params
     handleQRCodeRedirect();
 }
@@ -224,7 +230,7 @@ function handleQRCodeRedirect() {
     const plantId = urlParams.get('plant');
     const action = urlParams.get('action');
     const error = urlParams.get('error');
-    
+
     // Show error if plant not found
     if (error === 'plant_not_found') {
         showToast('Plant not found - QR code may be invalid', 'error');
@@ -232,12 +238,12 @@ function handleQRCodeRedirect() {
         window.history.replaceState({}, document.title, window.location.pathname);
         return;
     }
-    
+
     // If we have a plant ID from QR scan, navigate to it
     if (plantId) {
         // Navigate to plants page
         navigateTo('plants');
-        
+
         // Wait for plants to load, then show the plant
         setTimeout(() => {
             // plantId is already a string (UUID)
@@ -264,9 +270,9 @@ function showPlantQuickActions(plantId) {
         showToast('Plant not found', 'error');
         return;
     }
-    
+
     const displayName = plant.display_name || plant.name;
-    
+
     showModal(`🌱 ${displayName}`, `
         <div class="quick-actions-container">
             <p class="quick-actions-intro">What would you like to do with this plant?</p>
@@ -313,12 +319,12 @@ function navigateTo(page) {
     elements.navItems.forEach(item => {
         item.classList.toggle('active', item.dataset.page === page);
     });
-    
+
     // Update pages
     elements.pages.forEach(p => {
         p.classList.toggle('active', p.id === `${page}Page`);
     });
-    
+
     // Update title
     const titles = {
         dashboard: 'Dashboard',
@@ -333,13 +339,13 @@ function navigateTo(page) {
         leaderboard: 'Leaderboard'
     };
     elements.pageTitle.textContent = titles[page] || page;
-    
+
     // Load page data
     loadPageData(page);
 }
 
 async function loadPageData(page) {
-    switch(page) {
+    switch (page) {
         case 'dashboard':
             await loadDashboardData();
             break;
@@ -378,7 +384,7 @@ async function checkLLMStatus() {
     try {
         const response = await fetch(`${API_BASE}/llm/status`);
         const data = await response.json();
-        
+
         elements.llmStatusDot.className = 'status-dot ' + (data.connected ? 'connected' : 'disconnected');
         elements.llmStatusText.textContent = data.connected ? 'AI Connected' : 'AI Offline';
     } catch (error) {
@@ -392,17 +398,17 @@ async function checkLLMStatus() {
 // Helper function to refresh the models dropdown
 async function refreshModelsDropdown() {
     if (!elements.llmModelSelect) return;
-    
+
     const currentSelection = elements.llmModelSelect.value;
-    
+
     try {
         const modelsResp = await fetch(`${API_BASE}/llm/models`);
         const modelsData = await modelsResp.json();
         const models = modelsData.models || [];
-        
+
         elements.llmModelSelect.innerHTML = '<option value="">-- Select a model --</option>' +
             models.map(m => `<option value="${m}">${m}</option>`).join('');
-        
+
         // Restore previous selection if still valid
         if (currentSelection && models.includes(currentSelection)) {
             elements.llmModelSelect.value = currentSelection;
@@ -418,7 +424,7 @@ function setupLLMSettings() {
         e.stopPropagation();
         openLLMSettings();
     });
-    
+
     // Close settings modal
     elements.llmSettingsClose.addEventListener('click', closeLLMSettings);
     elements.llmSettingsOverlay.addEventListener('click', (e) => {
@@ -426,49 +432,49 @@ function setupLLMSettings() {
             closeLLMSettings();
         }
     });
-    
+
     // Test connection button
     elements.testConnectionBtn.addEventListener('click', testLLMConnection);
-    
+
     // Test tool calling button
     elements.testToolsBtn.addEventListener('click', testToolCalling);
-    
+
     // Save settings button
     elements.saveSettingsBtn.addEventListener('click', saveLLMSettings);
-    
+
     // Reset settings button
     elements.resetSettingsBtn.addEventListener('click', resetLLMSettings);
-    
+
     // View logs button
     elements.viewLogsBtn.addEventListener('click', toggleLogs);
-    
+
     // Refresh models when URL changes (with debounce)
     let urlDebounceTimer = null;
     elements.llmUrlInput?.addEventListener('input', () => {
         clearTimeout(urlDebounceTimer);
         urlDebounceTimer = setTimeout(refreshModelsDropdown, 1000);
     });
-    
+
     // Sync model select with text input
     elements.llmModelSelect?.addEventListener('change', (e) => {
         if (e.target.value) {
             elements.llmModelInput.value = e.target.value;
         }
     });
-    
+
     // Update slider value displays
     if (elements.contextLengthInput) {
         elements.contextLengthInput.addEventListener('input', (e) => {
             elements.contextLengthValue.textContent = e.target.value;
         });
     }
-    
+
     if (elements.gpuLayersInput) {
         elements.gpuLayersInput.addEventListener('input', (e) => {
             elements.gpuLayersValue.textContent = e.target.value;
         });
     }
-    
+
     if (elements.cpuThreadsInput) {
         elements.cpuThreadsInput.addEventListener('input', (e) => {
             elements.cpuThreadsValue.textContent = e.target.value;
@@ -478,32 +484,32 @@ function setupLLMSettings() {
 
 async function openLLMSettings() {
     elements.llmSettingsOverlay.classList.add('active');
-    
+
     // Load current settings
     let currentModel = '';
     try {
         const response = await fetch(`${API_BASE}/llm/settings`);
         const data = await response.json();
-        
+
         elements.llmUrlInput.value = data.url || '';
         elements.llmModelInput.value = data.model || '';
         currentModel = data.model || '';
         elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.placeholder = data.defaults?.model || 'model-name';
-        
+
         // Load new settings
         if (elements.contextLengthInput) {
             const contextLength = data.context_length || 8192;
             elements.contextLengthInput.value = contextLength;
             elements.contextLengthValue.textContent = contextLength;
         }
-        
+
         if (elements.gpuLayersInput) {
             const gpuLayers = data.gpu_layers || 35;
             elements.gpuLayersInput.value = gpuLayers;
             elements.gpuLayersValue.textContent = gpuLayers;
         }
-        
+
         if (elements.cpuThreadsInput) {
             const cpuThreads = data.cpu_threads || 8;
             elements.cpuThreadsInput.value = cpuThreads;
@@ -512,7 +518,7 @@ async function openLLMSettings() {
     } catch (error) {
         showToast('Failed to load settings', 'error');
     }
-    
+
     // Check current status
     await testLLMConnection();
     // Populate model select with available models
@@ -545,18 +551,18 @@ async function testLLMConnection() {
     elements.settingsStatusText.textContent = 'Testing connection...';
     elements.settingsStatusDot.className = 'status-dot large';
     elements.statusDetails.innerHTML = '';
-    
+
     try {
         const response = await fetch(`${API_BASE}/llm/status`);
         const data = await response.json();
-        
+
         elements.settingsStatusDot.className = 'status-dot large ' + (data.connected ? 'connected' : 'disconnected');
         elements.settingsStatusText.textContent = data.connected ? '✅ Connected' : '❌ Not Connected';
-        
+
         // Show details
         let details = `<div class="detail-item"><strong>URL:</strong> ${data.url || 'N/A'}</div>`;
         details += `<div class="detail-item"><strong>Model:</strong> ${data.model || 'N/A'}</div>`;
-        
+
         if (data.connected) {
             details += `<div class="detail-item success"><strong>Status:</strong> ${data.message}</div>`;
             if (data.model_response) {
@@ -568,13 +574,13 @@ async function testLLMConnection() {
                 details += `<div class="detail-item error"><strong>Details:</strong> ${data.error_details.substring(0, 200)}</div>`;
             }
         }
-        
+
         elements.statusDetails.innerHTML = details;
-        
+
         // Update sidebar status
         elements.llmStatusDot.className = 'status-dot ' + (data.connected ? 'connected' : 'disconnected');
         elements.llmStatusText.textContent = data.connected ? 'AI Connected' : 'AI Offline';
-        
+
     } catch (error) {
         elements.settingsStatusDot.className = 'status-dot large disconnected';
         elements.settingsStatusText.textContent = '❌ Connection Failed';
@@ -588,15 +594,15 @@ async function testLLMConnection() {
 async function testToolCalling() {
     elements.testToolsBtn.disabled = true;
     elements.testToolsBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Testing...';
-    
+
     try {
         const response = await fetch(`${API_BASE}/llm/test-tools`);
         const data = await response.json();
-        
+
         let details = elements.statusDetails.innerHTML;
         details += '<hr style="margin: 10px 0; border-color: var(--border-color);">';
         details += '<div class="detail-item"><strong>Tool Calling Test:</strong></div>';
-        
+
         if (data.supports_tools) {
             details += `<div class="detail-item success">✅ ${data.message}</div>`;
         } else {
@@ -608,9 +614,9 @@ async function testToolCalling() {
                 details += `<div class="detail-item"><strong>Model said:</strong> "${data.model_response}"</div>`;
             }
         }
-        
+
         elements.statusDetails.innerHTML = details;
-        
+
     } catch (error) {
         showToast('Failed to test tool calling', 'error');
     } finally {
@@ -624,35 +630,35 @@ async function saveLLMSettings() {
     // Prefer custom text input if present, otherwise use selection
     const selected = elements.llmModelSelect?.value || '';
     const model = (elements.llmModelInput.value.trim() || selected).trim();
-    
+
     // Get new settings values
     const context_length = parseInt(elements.contextLengthInput?.value || 8192);
     const gpu_layers = parseInt(elements.gpuLayersInput?.value || 35);
     const cpu_threads = parseInt(elements.cpuThreadsInput?.value || 8);
-    
+
     if (!url) {
         showToast('Please enter an API URL', 'error');
         return;
     }
-    
+
     elements.saveSettingsBtn.disabled = true;
     elements.saveSettingsBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Saving...';
-    
+
     try {
         const response = await fetch(`${API_BASE}/llm/settings`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                url, 
+            body: JSON.stringify({
+                url,
                 model,
                 context_length,
                 gpu_layers,
                 cpu_threads
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showToast('Settings saved successfully!', 'success');
             // Test connection with new settings
@@ -674,30 +680,30 @@ async function resetLLMSettings() {
     try {
         const response = await fetch(`${API_BASE}/llm/settings`);
         const data = await response.json();
-        
+
         elements.llmUrlInput.value = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.value = data.defaults?.model || 'ibm-granite/granite-3.3-8b-instruct';
-        
+
         // Reset new settings
         const defaultContextLength = data.defaults?.context_length || 8192;
         const defaultGpuLayers = data.defaults?.gpu_layers || 35;
         const defaultCpuThreads = data.defaults?.cpu_threads || 8;
-        
+
         if (elements.contextLengthInput) {
             elements.contextLengthInput.value = defaultContextLength;
             elements.contextLengthValue.textContent = defaultContextLength;
         }
-        
+
         if (elements.gpuLayersInput) {
             elements.gpuLayersInput.value = defaultGpuLayers;
             elements.gpuLayersValue.textContent = defaultGpuLayers;
         }
-        
+
         if (elements.cpuThreadsInput) {
             elements.cpuThreadsInput.value = defaultCpuThreads;
             elements.cpuThreadsValue.textContent = defaultCpuThreads;
         }
-        
+
         showToast('Settings reset to defaults (not saved yet)', 'info');
     } catch (error) {
         showToast('Failed to load default settings', 'error');
@@ -706,16 +712,16 @@ async function resetLLMSettings() {
 
 async function toggleLogs() {
     const container = elements.logsContainer;
-    
+
     if (container.classList.contains('hidden')) {
         container.classList.remove('hidden');
         elements.viewLogsBtn.innerHTML = '📋 Hide Logs';
-        
+
         // Load logs
         try {
             const response = await fetch(`${API_BASE}/llm/logs`);
             const data = await response.json();
-            
+
             if (data.logs && data.logs.length > 0) {
                 elements.logsContent.textContent = data.logs.join('');
                 // Scroll to bottom
@@ -750,19 +756,19 @@ async function processNote() {
         showToast('Please enter a note first', 'error');
         return;
     }
-    
+
     elements.processNoteBtn.disabled = true;
     elements.processNoteBtn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Processing...';
-    
+
     try {
         const response = await fetch(`${API_BASE}/llm/process-note`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ note })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success && data.extracted_actions && data.extracted_actions.length > 0) {
             displayExtractedActions(data.extracted_actions);
         } else if (data.error) {
@@ -798,7 +804,7 @@ function displayExtractedActions(actions) {
         log_weather: '🌤️',
         update_plant_status: '📝'
     };
-    
+
     const actionNames = {
         add_plant: 'Add Plant',
         log_watering: 'Log Watering',
@@ -810,16 +816,16 @@ function displayExtractedActions(actions) {
         log_weather: 'Log Weather',
         update_plant_status: 'Update Plant Status'
     };
-    
+
     let html = `<h4>✨ Extracted Actions (${actions.length})</h4>`;
-    
+
     actions.forEach((action, index) => {
         const icon = actionIcons[action.action] || '📋';
         const name = actionNames[action.action] || action.action;
         const params = Object.entries(action.parameters || {})
             .map(([k, v]) => `<strong>${k}:</strong> ${v}`)
             .join(', ');
-        
+
         html += `
             <div class="action-item" data-index="${index}">
                 <div class="action-icon">${icon}</div>
@@ -830,7 +836,7 @@ function displayExtractedActions(actions) {
             </div>
         `;
     });
-    
+
     html += `
         <div class="action-buttons">
             <button class="btn btn-secondary" onclick="cancelActions()">Cancel</button>
@@ -839,7 +845,7 @@ function displayExtractedActions(actions) {
             </button>
         </div>
     `;
-    
+
     elements.extractedActions.innerHTML = html;
     elements.extractedActions.classList.remove('hidden');
 }
@@ -855,17 +861,17 @@ async function applyActions(actions) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ actions })
         });
-        
+
         const data = await response.json();
-        
+
         const successCount = data.results.filter(r => r.success).length;
         showToast(`Successfully applied ${successCount} of ${actions.length} actions`, 'success');
-        
+
         // Clear and reload
         elements.noteInput.value = '';
         elements.extractedActions.classList.add('hidden');
         await loadDashboardData();
-        
+
     } catch (error) {
         showToast('Failed to apply actions', 'error');
     }
@@ -877,29 +883,29 @@ async function loadDashboardData() {
         // Load stats
         const statsResponse = await fetch(`${API_BASE}/dashboard/stats`);
         const stats = await statsResponse.json();
-        
+
         elements.statPlants.textContent = stats.active_plants;
         elements.statTasks.textContent = stats.pending_tasks;
         elements.statHarvests.textContent = stats.recent_harvests;
         elements.statPests.textContent = stats.active_pests;
-        
+
         // Load upcoming tasks
         const tasksResponse = await fetch(`${API_BASE}/tasks`);
         tasks = await tasksResponse.json();
         renderUpcomingTasks(tasks.slice(0, 5));
-        
+
         // Load plants for health chart and filter dropdowns
         const plantsResponse = await fetch(`${API_BASE}/plants`);
         plants = await plantsResponse.json();
         renderHealthChart();
-        
+
         // Populate chart filter dropdowns
         populateChartFilters();
-        
+
         // Load growth and watering charts
         await loadGrowthChart();
         await loadWateringChart();
-        
+
     } catch (error) {
         console.error('Failed to load dashboard data:', error);
     }
@@ -907,7 +913,7 @@ async function loadDashboardData() {
 
 function populateChartFilters() {
     const activePlants = plants.filter(p => p.status === 'active');
-    
+
     // Growth chart filter
     const growthFilter = elements.growthPlantFilter;
     if (growthFilter) {
@@ -918,7 +924,7 @@ function populateChartFilters() {
             growthFilter.value = activePlants[0].id;
         }
     }
-    
+
     // Watering chart filter
     const wateringFilter = elements.wateringPlantFilter;
     if (wateringFilter) {
@@ -936,11 +942,11 @@ function renderUpcomingTasks(taskList) {
         `;
         return;
     }
-    
+
     elements.upcomingTasks.innerHTML = taskList.map(task => {
         const dueDate = task.due_date ? new Date(task.due_date) : null;
         const isOverdue = dueDate && dueDate < new Date();
-        
+
         return `
             <div class="task-item">
                 <div class="task-checkbox" onclick="completeTask('${task.id}')"></div>
@@ -959,7 +965,7 @@ function renderUpcomingTasks(taskList) {
 function renderHealthChart() {
     const ctx = document.getElementById('healthChart')?.getContext('2d');
     if (!ctx) return;
-    
+
     // Get plants with recent growth logs
     const plantData = plants
         .filter(p => p.status === 'active' && p.growth_logs?.length > 0)
@@ -971,11 +977,11 @@ function renderHealthChart() {
                 health: latestLog?.health_rating || 5
             };
         });
-    
+
     if (healthChart) {
         healthChart.destroy();
     }
-    
+
     if (!plantData.length) {
         ctx.canvas.parentElement.innerHTML = `
             <div class="empty-state">
@@ -986,7 +992,7 @@ function renderHealthChart() {
         `;
         return;
     }
-    
+
     healthChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -994,15 +1000,15 @@ function renderHealthChart() {
             datasets: [{
                 label: 'Health Rating',
                 data: plantData.map(p => p.health),
-                backgroundColor: plantData.map(p => 
+                backgroundColor: plantData.map(p =>
                     p.health >= 7 ? 'rgba(34, 197, 94, 0.5)' :
-                    p.health >= 4 ? 'rgba(245, 158, 11, 0.5)' :
-                    'rgba(239, 68, 68, 0.5)'
+                        p.health >= 4 ? 'rgba(245, 158, 11, 0.5)' :
+                            'rgba(239, 68, 68, 0.5)'
                 ),
                 borderColor: plantData.map(p =>
                     p.health >= 7 ? '#22c55e' :
-                    p.health >= 4 ? '#f59e0b' :
-                    '#ef4444'
+                        p.health >= 4 ? '#f59e0b' :
+                            '#ef4444'
                 ),
                 borderWidth: 1
             }]
@@ -1043,7 +1049,7 @@ function renderHealthChart() {
 function setupFilters() {
     elements.plantStatusFilter?.addEventListener('change', () => loadPlants());
     elements.taskFilter?.addEventListener('change', () => loadTasks());
-    
+
     // Plants view toggle - query fresh to ensure buttons are found
     const viewBtns = document.querySelectorAll('.view-btn');
     console.debug('[setupFilters] found view buttons:', viewBtns.length);
@@ -1075,13 +1081,13 @@ function setupFilters() {
             }
         });
     }
-    
+
     // Plants search
     elements.plantSearchInput?.addEventListener('input', (e) => {
         plantSearchQuery = e.target.value.toLowerCase();
         filterAndRenderPlants();
     });
-    
+
     // Table sorting
     document.querySelectorAll('.data-table th[data-sort]')?.forEach(th => {
         th.addEventListener('click', () => sortPlantsTable(th.dataset.sort));
@@ -1094,14 +1100,14 @@ function switchPlantsView(view) {
     viewVisibility[view] = !viewVisibility[view];
     currentPlantsView = view; // keep last used view for compatibility
     console.debug('[switchPlantsView] switching to view:', view);
-    
+
     // Update button states - query fresh
     const viewBtns = document.querySelectorAll('.view-btn');
     viewBtns.forEach(btn => {
         const v = btn.dataset.view;
         btn.classList.toggle('active', !!viewVisibility[v]);
     });
-    
+
     // Show/hide containers
     elements.plantsList?.classList.toggle('hidden', !viewVisibility.grid);
     elements.plantsTable?.classList.toggle('hidden', !viewVisibility.table);
@@ -1111,11 +1117,11 @@ function switchPlantsView(view) {
         tableHidden: elements.plantsTable?.classList.contains('hidden'),
         chartsHidden: elements.plantsCharts?.classList.contains('hidden'),
     });
-    
+
     // Re-render for current view
     // Re-render for all visible views
     filterAndRenderPlants();
-    
+
     // Initialize charts if needed
     if (view === 'charts') {
         if (viewVisibility.charts) {
@@ -1129,22 +1135,22 @@ if (typeof window !== 'undefined') window.switchPlantsView = switchPlantsView;
 function filterAndRenderPlants() {
     const filter = elements.plantStatusFilter?.value || 'active';
     let filteredPlants = plants;
-    
+
     // Filter by status
     if (filter !== 'all') {
         filteredPlants = filteredPlants.filter(p => p.status === filter);
     }
-    
+
     // Filter by search query
     if (plantSearchQuery) {
-        filteredPlants = filteredPlants.filter(p => 
+        filteredPlants = filteredPlants.filter(p =>
             (p.name || '').toLowerCase().includes(plantSearchQuery) ||
             (p.variety || '').toLowerCase().includes(plantSearchQuery) ||
             (p.location || '').toLowerCase().includes(plantSearchQuery) ||
             (p.unique_code || '').toLowerCase().includes(plantSearchQuery)
         );
     }
-    
+
     // Render based on viewVisibility so multiple views can be stacked
     if (viewVisibility.grid) {
         renderPlants(filteredPlants);
@@ -1176,7 +1182,7 @@ async function loadPlants() {
     try {
         const response = await fetch(`${API_BASE}/plants`);
         plants = await response.json();
-        
+
         filterAndRenderPlants();
     } catch (error) {
         console.error('Failed to load plants:', error);
@@ -1194,14 +1200,14 @@ function renderPlants(plantList) {
         `;
         return;
     }
-    
+
     const plantEmojis = ['🌱', '🌿', '🌻', '🌷', '🌹', '🍅', '🥕', '🌶️', '🥬', '🍃'];
-    
+
     elements.plantsList.innerHTML = plantList.map((plant, index) => {
         const emoji = plantEmojis[index % plantEmojis.length];
         const plantedDate = plant.date_planted ? formatDate(new Date(plant.date_planted)) : 'Unknown';
         const displayName = plant.display_name || plant.name;
-        
+
         return `
             <div class="plant-card">
                 <div class="plant-image">${emoji}</div>
@@ -1228,11 +1234,11 @@ function renderPlants(plantList) {
 
 function renderPlantsTable(plantList) {
     if (!elements.plantsTableBody) return;
-    
+
     // Sort the data
     const sortedPlants = [...plantList].sort((a, b) => {
         let aVal, bVal;
-        
+
         switch (plantSortColumn) {
             case 'name':
                 aVal = (a.display_name || a.name || '').toLowerCase();
@@ -1270,12 +1276,12 @@ function renderPlantsTable(plantList) {
                 aVal = '';
                 bVal = '';
         }
-        
+
         if (aVal < bVal) return plantSortDirection === 'asc' ? -1 : 1;
         if (aVal > bVal) return plantSortDirection === 'asc' ? 1 : -1;
         return 0;
     });
-    
+
     if (!sortedPlants.length) {
         elements.plantsTableBody.innerHTML = `
             <tr>
@@ -1289,14 +1295,14 @@ function renderPlantsTable(plantList) {
         `;
         return;
     }
-    
+
     elements.plantsTableBody.innerHTML = sortedPlants.map(plant => {
         const displayName = plant.display_name || plant.name;
         const plantedDate = plant.date_planted ? formatDate(new Date(plant.date_planted)) : '-';
         const latestHeight = getLatestGrowthValue(plant, 'height_cm');
         const latestHealth = getLatestGrowthValue(plant, 'health_rating');
         const wateringCount = (plant.waterings || []).length;
-        
+
         return `
             <tr>
                 <td><strong>${displayName}</strong></td>
@@ -1322,7 +1328,7 @@ function renderPlantsTable(plantList) {
 function getLatestGrowthValue(plant, field) {
     const logs = plant.growth_logs || [];
     if (!logs.length) return null;
-    
+
     // Sort by date descending and get latest
     const sorted = [...logs].sort((a, b) => new Date(b.date) - new Date(a.date));
     return sorted[0][field];
@@ -1332,27 +1338,27 @@ function getHealthBadge(rating) {
     let color = 'var(--success)';
     if (rating < 4) color = 'var(--danger)';
     else if (rating < 7) color = 'var(--warning)';
-    
+
     return `<span class="health-badge" style="background: ${color}">${rating}/10</span>`;
 }
 
 function renderPlantsCharts() {
     const filter = elements.plantStatusFilter?.value || 'active';
     let chartPlants = plants;
-    
+
     if (filter !== 'all') {
         chartPlants = plants.filter(p => p.status === filter);
     }
-    
+
     // Apply search filter to charts too
     if (plantSearchQuery) {
-        chartPlants = chartPlants.filter(p => 
+        chartPlants = chartPlants.filter(p =>
             (p.name || '').toLowerCase().includes(plantSearchQuery) ||
             (p.variety || '').toLowerCase().includes(plantSearchQuery) ||
             (p.location || '').toLowerCase().includes(plantSearchQuery)
         );
     }
-    
+
     renderHealthDistributionChart(chartPlants);
     renderGrowthComparisonChart(chartPlants);
     renderWateringFrequencyChart(chartPlants);
@@ -1362,15 +1368,15 @@ function renderPlantsCharts() {
 function renderHealthDistributionChart(plantList) {
     const ctx = document.getElementById('healthDistributionChart');
     if (!ctx) return;
-    
+
     // Destroy existing chart
     if (healthDistributionChart) {
         healthDistributionChart.destroy();
     }
-    
+
     // Count plants by health rating groups
     const healthGroups = { 'Excellent (8-10)': 0, 'Good (5-7)': 0, 'Poor (1-4)': 0, 'No Data': 0 };
-    
+
     plantList.forEach(plant => {
         const health = getLatestGrowthValue(plant, 'health_rating');
         if (!health) healthGroups['No Data']++;
@@ -1378,7 +1384,7 @@ function renderHealthDistributionChart(plantList) {
         else if (health >= 5) healthGroups['Good (5-7)']++;
         else healthGroups['Poor (1-4)']++;
     });
-    
+
     healthDistributionChart = new Chart(ctx, {
         type: 'doughnut',
         data: {
@@ -1391,13 +1397,13 @@ function renderHealthDistributionChart(plantList) {
         options: {
             responsive: true,
             plugins: {
-                legend: { 
+                legend: {
                     position: 'bottom',
                     onClick: (e, legendItem, legend) => {
                         const index = legendItem.index;
                         const chart = legend.chart;
                         const meta = chart.getDatasetMeta(0);
-                        
+
                         // Toggle the hidden state
                         if (meta.data[index]) {
                             meta.data[index].hidden = !meta.data[index].hidden;
@@ -1413,16 +1419,16 @@ function renderHealthDistributionChart(plantList) {
 function renderGrowthComparisonChart(plantList) {
     const ctx = document.getElementById('growthComparisonChart');
     if (!ctx) return;
-    
+
     if (growthComparisonChart) {
         growthComparisonChart.destroy();
     }
-    
+
     // Get plants with growth data
     const plantsWithGrowth = plantList
         .filter(p => (p.growth_logs || []).length > 0)
         .slice(0, 10); // Top 10 for readability
-    
+
     if (!plantsWithGrowth.length) {
         growthComparisonChart = new Chart(ctx, {
             type: 'bar',
@@ -1431,14 +1437,14 @@ function renderGrowthComparisonChart(plantList) {
         });
         return;
     }
-    
+
     const labels = plantsWithGrowth.map(p => p.display_name || p.name);
     const heights = plantsWithGrowth.map(p => getLatestGrowthValue(p, 'height_cm') || 0);
     const bgColors = plantsWithGrowth.map(() => '#3b82f6');
-    
+
     // Track hidden bars
     const hiddenBars = new Array(plantsWithGrowth.length).fill(false);
-    
+
     growthComparisonChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -1462,16 +1468,16 @@ function renderGrowthComparisonChart(plantList) {
                     const index = elements[0].index;
                     const chart = growthComparisonChart;
                     const meta = chart.getDatasetMeta(0);
-                    
+
                     // Toggle visibility
                     hiddenBars[index] = !hiddenBars[index];
                     meta.data[index].hidden = hiddenBars[index];
-                    
+
                     // Update bar appearance (make transparent when hidden)
-                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) => 
+                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) =>
                         hiddenBars[i] ? 'rgba(59, 130, 246, 0.2)' : color
                     );
-                    
+
                     chart.update();
                 }
             }
@@ -1482,16 +1488,16 @@ function renderGrowthComparisonChart(plantList) {
 function renderWateringFrequencyChart(plantList) {
     const ctx = document.getElementById('wateringFrequencyChart');
     if (!ctx) return;
-    
+
     if (wateringFrequencyChart) {
         wateringFrequencyChart.destroy();
     }
-    
+
     // Get watering counts by plant
     const plantsWithWatering = plantList
         .filter(p => (p.waterings || []).length > 0)
         .slice(0, 10);
-    
+
     if (!plantsWithWatering.length) {
         wateringFrequencyChart = new Chart(ctx, {
             type: 'bar',
@@ -1500,14 +1506,14 @@ function renderWateringFrequencyChart(plantList) {
         });
         return;
     }
-    
+
     const labels = plantsWithWatering.map(p => p.display_name || p.name);
     const counts = plantsWithWatering.map(p => (p.waterings || []).length);
     const bgColors = plantsWithWatering.map(() => '#06b6d4');
-    
+
     // Track hidden bars
     const hiddenBars = new Array(plantsWithWatering.length).fill(false);
-    
+
     wateringFrequencyChart = new Chart(ctx, {
         type: 'bar',
         data: {
@@ -1531,16 +1537,16 @@ function renderWateringFrequencyChart(plantList) {
                     const index = elements[0].index;
                     const chart = wateringFrequencyChart;
                     const meta = chart.getDatasetMeta(0);
-                    
+
                     // Toggle visibility
                     hiddenBars[index] = !hiddenBars[index];
                     meta.data[index].hidden = hiddenBars[index];
-                    
+
                     // Update bar appearance (make transparent when hidden)
-                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) => 
+                    chart.data.datasets[0].backgroundColor = bgColors.map((color, i) =>
                         hiddenBars[i] ? 'rgba(6, 182, 212, 0.2)' : color
                     );
-                    
+
                     chart.update();
                 }
             }
@@ -1551,18 +1557,18 @@ function renderWateringFrequencyChart(plantList) {
 function renderLocationDistributionChart(plantList) {
     const ctx = document.getElementById('locationDistributionChart');
     if (!ctx) return;
-    
+
     if (locationDistributionChart) {
         locationDistributionChart.destroy();
     }
-    
+
     // Count plants by location
     const locationCounts = {};
     plantList.forEach(plant => {
         const loc = plant.location || 'Unknown';
         locationCounts[loc] = (locationCounts[loc] || 0) + 1;
     });
-    
+
     locationDistributionChart = new Chart(ctx, {
         type: 'pie',
         data: {
@@ -1575,13 +1581,13 @@ function renderLocationDistributionChart(plantList) {
         options: {
             responsive: true,
             plugins: {
-                legend: { 
+                legend: {
                     position: 'bottom',
                     onClick: (e, legendItem, legend) => {
                         const index = legendItem.index;
                         const chart = legend.chart;
                         const meta = chart.getDatasetMeta(0);
-                        
+
                         // Toggle the hidden state
                         if (meta.data[index]) {
                             meta.data[index].hidden = !meta.data[index].hidden;
@@ -1599,17 +1605,17 @@ async function loadTasks() {
     try {
         const filter = elements.taskFilter?.value || 'pending';
         const url = filter === 'completed' ? `${API_BASE}/tasks?completed=true` : `${API_BASE}/tasks`;
-        
+
         const response = await fetch(url);
         tasks = await response.json();
-        
+
         let filteredTasks = tasks;
         if (filter === 'completed') {
             filteredTasks = tasks.filter(t => t.completed);
         } else if (filter === 'pending') {
             filteredTasks = tasks.filter(t => !t.completed);
         }
-        
+
         renderTasks(filteredTasks);
     } catch (error) {
         console.error('Failed to load tasks:', error);
@@ -1627,11 +1633,11 @@ function renderTasks(taskList) {
         `;
         return;
     }
-    
+
     elements.tasksList.innerHTML = taskList.map(task => {
         const dueDate = task.due_date ? new Date(task.due_date) : null;
         const isOverdue = dueDate && dueDate < new Date() && !task.completed;
-        
+
         return `
             <div class="task-item">
                 <div class="task-checkbox ${task.completed ? 'checked' : ''}" 
@@ -1666,7 +1672,7 @@ async function completeTask(taskId) {
 
 async function deleteTask(taskId) {
     if (!confirm('Delete this task?')) return;
-    
+
     try {
         await fetch(`${API_BASE}/tasks/${taskId}`, { method: 'DELETE' });
         showToast('Task deleted', 'success');
@@ -1698,7 +1704,7 @@ function renderHarvests(harvestList) {
         `;
         return;
     }
-    
+
     elements.harvestsList.innerHTML = harvestList.map(harvest => `
         <div class="harvest-item">
             <div class="harvest-icon">🥕</div>
@@ -1736,10 +1742,10 @@ function renderNotes(noteList) {
         `;
         return;
     }
-    
+
     elements.notesList.innerHTML = noteList.map(note => {
         const actions = note.extracted_data || [];
-        
+
         return `
             <div class="note-item">
                 <div class="note-header">
@@ -1768,7 +1774,7 @@ function renderNotes(noteList) {
 
 async function deleteNote(noteId) {
     if (!confirm('Are you sure you want to delete this note? This cannot be undone.')) return;
-    
+
     try {
         await fetch(`${API_BASE}/notes/${noteId}`, { method: 'DELETE' });
         showToast('Note deleted', 'success');
@@ -1795,6 +1801,22 @@ function setupWeatherSearch() {
     elements.weatherSearchInput?.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') fetchWeatherByLocation();
     });
+    elements.weatherUnitToggle?.addEventListener('click', toggleWeatherUnit);
+}
+
+function toggleWeatherUnit() {
+    weatherUnit = weatherUnit === 'C' ? 'F' : 'C';
+    if (elements.weatherUnitToggle) {
+        elements.weatherUnitToggle.textContent = `°${weatherUnit}`;
+    }
+
+    // Re-render if we have data
+    if (lastWeatherSearchResult) {
+        renderWeatherSearchResult(lastWeatherSearchResult);
+    }
+
+    // Refresh weather list
+    renderWeather(weather);
 }
 
 async function fetchWeatherByLocation() {
@@ -1803,78 +1825,18 @@ async function fetchWeatherByLocation() {
         showToast('Please enter a zipcode or city name', 'error');
         return;
     }
-    
+
     elements.fetchWeatherBtn.disabled = true;
     elements.fetchWeatherBtn.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></span> Searching...';
     elements.weatherSearchResult.classList.add('hidden');
-    
+
     try {
         const response = await fetch(`${API_BASE}/weather/search?q=${encodeURIComponent(query)}`);
         const data = await response.json();
-        
-        if (data.error) {
-            if (data.hint) {
-                // API key not configured - show setup prompt
-                elements.weatherSearchResult.innerHTML = `
-                    <div class="weather-error">
-                        <p>⚠️ ${data.error}</p>
-                        <p class="hint">${data.hint}</p>
-                        <button class="btn btn-secondary btn-sm" onclick="showWeatherApiSetup()">Configure API Key</button>
-                    </div>
-                `;
-            } else {
-                elements.weatherSearchResult.innerHTML = `
-                    <div class="weather-error">
-                        <p>❌ ${data.error}</p>
-                    </div>
-                `;
-            }
-            elements.weatherSearchResult.classList.remove('hidden');
-            return;
-        }
-        
-        // Display the weather result
-        const iconUrl = data.icon ? `https://openweathermap.org/img/wn/${data.icon}@2x.png` : '';
-        elements.weatherSearchResult.innerHTML = `
-            <div class="weather-result-card">
-                <div class="weather-result-header">
-                    ${iconUrl ? `<img src="${iconUrl}" alt="Weather icon" class="weather-icon-img">` : ''}
-                    <div>
-                        <h4>${data.location}${data.country ? `, ${data.country}` : ''}</h4>
-                        <p class="weather-condition">${data.conditions}</p>
-                    </div>
-                </div>
-                <div class="weather-result-details">
-                    <div class="weather-stat">
-                        <span class="stat-value">${Math.round(data.temperature)}°C</span>
-                        <span class="stat-label">Current</span>
-                    </div>
-                    <div class="weather-stat">
-                        <span class="stat-value">${Math.round(data.temperature_high)}°</span>
-                        <span class="stat-label">High</span>
-                    </div>
-                    <div class="weather-stat">
-                        <span class="stat-value">${Math.round(data.temperature_low)}°</span>
-                        <span class="stat-label">Low</span>
-                    </div>
-                    <div class="weather-stat">
-                        <span class="stat-value">${data.humidity}%</span>
-                        <span class="stat-label">Humidity</span>
-                    </div>
-                    <div class="weather-stat">
-                        <span class="stat-value">${data.wind_speed} m/s</span>
-                        <span class="stat-label">Wind</span>
-                    </div>
-                </div>
-                <div class="weather-result-actions">
-                    <button class="btn btn-primary btn-sm" onclick="saveWeatherToLog(${JSON.stringify(data).replace(/"/g, '&quot;')})">
-                        💾 Save to Weather Log
-                    </button>
-                </div>
-            </div>
-        `;
-        elements.weatherSearchResult.classList.remove('hidden');
-        
+
+        lastWeatherSearchResult = data;
+        renderWeatherSearchResult(data);
+
     } catch (error) {
         elements.weatherSearchResult.innerHTML = `
             <div class="weather-error">
@@ -1888,6 +1850,77 @@ async function fetchWeatherByLocation() {
     }
 }
 
+function renderWeatherSearchResult(data) {
+    if (data.error) {
+        if (data.hint) {
+            // API key not configured - show setup prompt
+            elements.weatherSearchResult.innerHTML = `
+                <div class="weather-error">
+                    <p>⚠️ ${data.error}</p>
+                    <p class="hint">${data.hint}</p>
+                    <button class="btn btn-secondary btn-sm" onclick="showWeatherApiSetup()">Configure API Key</button>
+                </div>
+            `;
+        } else {
+            elements.weatherSearchResult.innerHTML = `
+                <div class="weather-error">
+                    <p>❌ ${data.error}</p>
+                </div>
+            `;
+        }
+        elements.weatherSearchResult.classList.remove('hidden');
+        return;
+    }
+
+    const isC = weatherUnit === 'C';
+    const temp = Math.round(isC ? data.temperature : (data.temperature_F !== undefined ? data.temperature_F : (data.temperature * 9 / 5 + 32)));
+    const high = Math.round(isC ? data.temperature_high : (data.temperature_high_F !== undefined ? data.temperature_high_F : (data.temperature_high * 9 / 5 + 32)));
+    const low = Math.round(isC ? data.temperature_low : (data.temperature_low_F !== undefined ? data.temperature_low_F : (data.temperature_low * 9 / 5 + 32)));
+    const unitLabel = isC ? '°C' : '°F';
+    const degree = '°';
+
+    const iconUrl = data.icon ? `https://openweathermap.org/img/wn/${data.icon}@2x.png` : '';
+    elements.weatherSearchResult.innerHTML = `
+        <div class="weather-result-card">
+            <div class="weather-result-header">
+                ${iconUrl ? `<img src="${iconUrl}" alt="Weather icon" class="weather-icon-img">` : ''}
+                <div>
+                    <h4>${data.location}${data.country ? `, ${data.country}` : ''}</h4>
+                    <p class="weather-condition">${data.conditions}</p>
+                </div>
+            </div>
+            <div class="weather-result-details">
+                <div class="weather-stat">
+                    <span class="stat-value">${temp}${unitLabel}</span>
+                    <span class="stat-label">Current</span>
+                </div>
+                <div class="weather-stat">
+                    <span class="stat-value">${high}${degree}</span>
+                    <span class="stat-label">High</span>
+                </div>
+                <div class="weather-stat">
+                    <span class="stat-value">${low}${degree}</span>
+                    <span class="stat-label">Low</span>
+                </div>
+                <div class="weather-stat">
+                    <span class="stat-value">${data.humidity}%</span>
+                    <span class="stat-label">Humidity</span>
+                </div>
+                <div class="weather-stat">
+                    <span class="stat-value">${data.wind_speed} m/s</span>
+                    <span class="stat-label">Wind</span>
+                </div>
+            </div>
+            <div class="weather-result-actions">
+                <button class="btn btn-primary btn-sm" onclick="saveWeatherToLog(${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                    💾 Save to Weather Log
+                </button>
+            </div>
+        </div>
+    `;
+    elements.weatherSearchResult.classList.remove('hidden');
+}
+
 async function saveWeatherToLog(weatherData) {
     try {
         const data = {
@@ -1897,13 +1930,13 @@ async function saveWeatherToLog(weatherData) {
             conditions: weatherData.conditions,
             notes: `Location: ${weatherData.location}${weatherData.country ? ', ' + weatherData.country : ''}`
         };
-        
+
         await fetch(`${API_BASE}/weather`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        
+
         showToast('Weather saved to log!', 'success');
         await loadWeather();
     } catch (error) {
@@ -1939,14 +1972,14 @@ async function saveWeatherApiKey() {
         showToast('Please enter an API key', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/weather/settings`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ api_key: apiKey })
         });
-        
+
         const data = await response.json();
         if (data.success) {
             showToast('API key saved!', 'success');
@@ -1970,7 +2003,7 @@ function renderWeather(weatherList) {
         `;
         return;
     }
-    
+
     const weatherIcons = {
         sunny: '☀️',
         cloudy: '☁️',
@@ -1980,10 +2013,25 @@ function renderWeather(weatherList) {
         windy: '💨',
         foggy: '🌫️'
     };
-    
+
+    const isC = weatherUnit === 'C';
+    const degree = '°';
+    const unitLabel = isC ? 'C' : 'F';
+
     elements.weatherList.innerHTML = weatherList.map(w => {
         const icon = weatherIcons[w.conditions?.toLowerCase()] || '🌤️';
-        
+
+        // Convert stored logs (assumed C) if needed
+        let high = w.temperature_high;
+        let low = w.temperature_low;
+
+        if (high !== undefined && high !== null && !isC) {
+            high = Math.round(high * 9 / 5 + 32);
+        }
+        if (low !== undefined && low !== null && !isC) {
+            low = Math.round(low * 9 / 5 + 32);
+        }
+
         return `
             <div class="weather-item">
                 <div class="weather-icon">${icon}</div>
@@ -1993,11 +2041,11 @@ function renderWeather(weatherList) {
                 </div>
                 <div class="weather-temps">
                     <div class="weather-temp high">
-                        <div class="weather-temp-value">${w.temperature_high || '--'}°</div>
+                        <div class="weather-temp-value">${high !== undefined && high !== null ? high + degree : '--'}</div>
                         <div class="weather-temp-label">High</div>
                     </div>
                     <div class="weather-temp low">
-                        <div class="weather-temp-value">${w.temperature_low || '--'}°</div>
+                        <div class="weather-temp-value">${low !== undefined && low !== null ? low + degree : '--'}</div>
                         <div class="weather-temp-label">Low</div>
                     </div>
                 </div>
@@ -2010,10 +2058,10 @@ function renderWeather(weatherList) {
 function setupLeaderboard() {
     // Metric selector
     elements.leaderboardMetric?.addEventListener('change', loadLeaderboard);
-    
+
     // Category selector
     elements.leaderboardCategory?.addEventListener('change', loadLeaderboard);
-    
+
     // Select plants button
     elements.selectPlantsBtn?.addEventListener('click', showPlantSelectorModal);
 }
@@ -2021,12 +2069,12 @@ function setupLeaderboard() {
 async function loadLeaderboard() {
     const metric = elements.leaderboardMetric?.value || 'growth_rate';
     const category = elements.leaderboardCategory?.value || 'all';
-    
+
     // Get selected plant IDs (if any)
-    const plantIds = selectedLeaderboardPlants.size > 0 
-        ? Array.from(selectedLeaderboardPlants).join(',') 
+    const plantIds = selectedLeaderboardPlants.size > 0
+        ? Array.from(selectedLeaderboardPlants).join(',')
         : '';
-    
+
     try {
         // Also fetch plants to populate categories
         const plantsResponse = await fetch(`${API_BASE}/plants`);
@@ -2034,22 +2082,22 @@ async function loadLeaderboard() {
             const plants = await plantsResponse.json();
             populateLeaderboardCategories(plants);
         }
-        
+
         let url = `${API_BASE}/leaderboard?metric=${metric}`;
         if (category !== 'all') url += `&category=${encodeURIComponent(category)}`;
         if (plantIds) url += `&plant_ids=${plantIds}`;
-        
+
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load leaderboard');
-        
+
         const data = await response.json();
         renderLeaderboard(data, metric);
         renderLeaderboardChart(data, metric);
-        
+
         // Update selected plants count
         if (elements.selectedPlantsCount) {
-            elements.selectedPlantsCount.textContent = selectedLeaderboardPlants.size > 0 
-                ? `(${selectedLeaderboardPlants.size} selected)` 
+            elements.selectedPlantsCount.textContent = selectedLeaderboardPlants.size > 0
+                ? `(${selectedLeaderboardPlants.size} selected)`
                 : '(All plants)';
         }
     } catch (error) {
@@ -2062,15 +2110,15 @@ async function loadLeaderboard() {
 
 function populateLeaderboardCategories(plants) {
     if (!elements.leaderboardCategory) return;
-    
+
     const currentValue = elements.leaderboardCategory.value;
     const categories = [...new Set(plants.map(p => p.category).filter(Boolean))];
-    
+
     // Only rebuild if categories changed
     if (elements.leaderboardCategory.options.length !== categories.length + 1) {
         elements.leaderboardCategory.innerHTML = '<option value="all">All Plants</option>' +
             categories.map(cat => `<option value="${cat}">${cat}</option>`).join('');
-        
+
         // Restore selection if still valid
         if (categories.includes(currentValue)) {
             elements.leaderboardCategory.value = currentValue;
@@ -2080,9 +2128,9 @@ function populateLeaderboardCategories(plants) {
 
 function renderLeaderboard(data, metric) {
     if (!elements.leaderboardRankings) return;
-    
+
     const rankings = data.rankings || [];
-    
+
     if (rankings.length === 0) {
         elements.leaderboardRankings.innerHTML = `
             <div class="empty-state">
@@ -2093,24 +2141,24 @@ function renderLeaderboard(data, metric) {
         `;
         return;
     }
-    
+
     const metricLabels = {
         growth_rate: 'Growth Rate',
         health: 'Health Score',
         harvests: 'Total Harvests'
     };
-    
+
     const metricUnits = {
         growth_rate: 'cm/day',
         health: '/10',
         harvests: 'harvests'
     };
-    
+
     elements.leaderboardRankings.innerHTML = rankings.map((item, index) => {
         const rank = index + 1;
         const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : '';
         const rankClass = rank <= 3 ? `rank-${rank}` : '';
-        
+
         // Get value based on the metric - backend returns metric as property name
         const rawValue = item[metric] || 0;
         let displayValue = rawValue;
@@ -2119,10 +2167,10 @@ function renderLeaderboard(data, metric) {
         } else if (metric === 'health') {
             displayValue = rawValue.toFixed(1);
         }
-        
+
         // Use display_name if available, otherwise fall back to name
         const plantName = item.display_name || item.name;
-        
+
         return `
             <div class="ranking-item ${rankClass}">
                 <div class="ranking-position">
@@ -2139,7 +2187,7 @@ function renderLeaderboard(data, metric) {
             </div>
         `;
     }).join('');
-    
+
     // Update chart title
     if (elements.leaderboardChartTitle) {
         elements.leaderboardChartTitle.textContent = `${metricLabels[metric]} Rankings`;
@@ -2149,7 +2197,7 @@ function renderLeaderboard(data, metric) {
 function renderLeaderboardChart(data, metric) {
     const canvas = document.getElementById('leaderboardChart');
     if (!canvas) return;
-    
+
     const rankings = data.rankings || [];
     if (rankings.length === 0) {
         if (leaderboardChart) {
@@ -2158,18 +2206,18 @@ function renderLeaderboardChart(data, metric) {
         }
         return;
     }
-    
+
     // Take top 10 for the chart
     const topRankings = rankings.slice(0, 10);
-    
+
     const metricColors = {
         growth_rate: { bg: 'rgba(76, 175, 80, 0.6)', border: 'rgba(76, 175, 80, 1)' },
         health: { bg: 'rgba(33, 150, 243, 0.6)', border: 'rgba(33, 150, 243, 1)' },
         harvests: { bg: 'rgba(255, 152, 0, 0.6)', border: 'rgba(255, 152, 0, 1)' }
     };
-    
+
     const colors = metricColors[metric] || metricColors.growth_rate;
-    
+
     const chartData = {
         labels: topRankings.map(r => {
             const name = r.display_name || r.name;
@@ -2183,11 +2231,11 @@ function renderLeaderboardChart(data, metric) {
             borderWidth: 1
         }]
     };
-    
+
     if (leaderboardChart) {
         leaderboardChart.destroy();
     }
-    
+
     leaderboardChart = new Chart(canvas, {
         type: 'bar',
         data: chartData,
@@ -2214,9 +2262,9 @@ async function showPlantSelectorModal() {
     try {
         const response = await fetch(`${API_BASE}/plants`);
         if (!response.ok) throw new Error('Failed to load plants');
-        
+
         const plants = await response.json();
-        
+
         const modalContent = `
             <h2>Select Plants for Comparison</h2>
             <div class="plant-selector-list">
@@ -2235,7 +2283,7 @@ async function showPlantSelectorModal() {
                 <button type="button" class="btn btn-primary" onclick="applyPlantSelection()">Apply</button>
             </div>
         `;
-        
+
         openModal(modalContent);
     } catch (error) {
         console.error('Error loading plants for selector:', error);
@@ -2256,13 +2304,13 @@ function selectAllPlants() {
 function applyPlantSelection() {
     const checkboxes = document.querySelectorAll('.plant-selector-item input[type="checkbox"]');
     selectedLeaderboardPlants.clear();
-    
+
     checkboxes.forEach(cb => {
         if (cb.checked) {
             selectedLeaderboardPlants.add(cb.value);
         }
     });
-    
+
     closeModal();
     loadLeaderboard();
 }
@@ -2274,7 +2322,7 @@ function setupButtons() {
     elements.addWeatherBtn?.addEventListener('click', showAddWeatherModal);
     elements.addRecipeBtn?.addEventListener('click', showAddRecipeModal);
     elements.addProductBtn?.addEventListener('click', showAddProductModal);
-    
+
     // Chart filter listeners
     elements.growthPlantFilter?.addEventListener('change', loadGrowthChart);
     elements.wateringPlantFilter?.addEventListener('change', loadWateringChart);
@@ -2297,8 +2345,8 @@ function showModal(title, content) {
 function closeModal() {
     elements.modalOverlay.classList.remove('active');
     // Destroy any plant detail charts to free memory and prevent resize issues
-    if (plantGrowthChart) { try { plantGrowthChart.destroy(); } catch(e) {} plantGrowthChart = null; }
-    if (plantWateringChart) { try { plantWateringChart.destroy(); } catch(e) {} plantWateringChart = null; }
+    if (plantGrowthChart) { try { plantGrowthChart.destroy(); } catch (e) { } plantGrowthChart = null; }
+    if (plantWateringChart) { try { plantWateringChart.destroy(); } catch (e) { } plantWateringChart = null; }
 }
 
 function showAddPlantModal() {
@@ -2345,7 +2393,7 @@ function showAddPlantModal() {
             </div>
         </form>
     `);
-    
+
     document.getElementById('addPlantForm').addEventListener('submit', handleAddPlant);
 }
 
@@ -2354,12 +2402,12 @@ async function handleAddPlant(e) {
     const form = e.target;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     // Convert quantity to integer
     if (data.quantity) {
         data.quantity = parseInt(data.quantity) || 1;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/plants`, {
             method: 'POST',
@@ -2367,7 +2415,7 @@ async function handleAddPlant(e) {
             body: JSON.stringify(data)
         });
         const result = await response.json();
-        
+
         if (data.quantity > 1) {
             showToast(`${result.plants?.length || data.quantity} plants added!`, 'success');
         } else {
@@ -2434,7 +2482,7 @@ function showAddTaskModal() {
             </div>
         </form>
     `);
-    
+
     document.getElementById('addTaskForm').addEventListener('submit', handleAddTask);
 }
 
@@ -2444,7 +2492,7 @@ async function handleAddTask(e) {
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
     data.recurring = data.recurring === 'true';
-    
+
     try {
         await fetch(`${API_BASE}/tasks`, {
             method: 'POST',
@@ -2462,7 +2510,7 @@ async function handleAddTask(e) {
 
 function showAddWeatherModal() {
     const today = new Date().toISOString().split('T')[0];
-    
+
     showModal('Log Weather', `
         <form id="addWeatherForm">
             <div class="form-group">
@@ -2510,7 +2558,7 @@ function showAddWeatherModal() {
             </div>
         </form>
     `);
-    
+
     document.getElementById('addWeatherForm').addEventListener('submit', handleAddWeather);
 }
 
@@ -2519,13 +2567,13 @@ async function handleAddWeather(e) {
     const form = e.target;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     // Convert numeric fields
     if (data.temperature_high) data.temperature_high = parseFloat(data.temperature_high);
     if (data.temperature_low) data.temperature_low = parseFloat(data.temperature_low);
     if (data.rainfall_mm) data.rainfall_mm = parseFloat(data.rainfall_mm);
     if (data.humidity) data.humidity = parseFloat(data.humidity);
-    
+
     try {
         await fetch(`${API_BASE}/weather`, {
             method: 'POST',
@@ -2544,13 +2592,13 @@ async function handleAddWeather(e) {
 async function viewPlant(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
-    
+
     const growthLogs = plant.growth_logs || [];
     const latestGrowth = growthLogs[growthLogs.length - 1];
     const displayName = plant.display_name || plant.name;
     const waterings = plant.waterings || [];
     const fertilizations = plant.fertilizations || [];
-    
+
     // Generate watering history HTML
     const wateringHistoryHtml = waterings.length > 0 ? `
         <div class="history-section">
@@ -2569,7 +2617,7 @@ async function viewPlant(plantId) {
             </div>
         </div>
     ` : '';
-    
+
     // Generate fertilization history HTML
     const fertilizationHistoryHtml = fertilizations.length > 0 ? `
         <div class="history-section">
@@ -2589,7 +2637,7 @@ async function viewPlant(plantId) {
             </div>
         </div>
     ` : '';
-    
+
     showModal(`🌱 ${displayName}`, `
         <div class="plant-details">
             <div class="form-row">
@@ -2655,7 +2703,7 @@ async function viewPlant(plantId) {
             </div>
         </div>
     `);
-    
+
     // Load and render charts after modal is shown
     await renderPlantDetailCharts(plantId);
 }
@@ -2663,11 +2711,11 @@ async function viewPlant(plantId) {
 async function renderPlantDetailCharts(plantId) {
     // Destroy any existing detail charts to avoid duplication
     if (plantGrowthChart) {
-        try { plantGrowthChart.destroy(); } catch(e) {}
+        try { plantGrowthChart.destroy(); } catch (e) { }
         plantGrowthChart = null;
     }
     if (plantWateringChart) {
-        try { plantWateringChart.destroy(); } catch(e) {}
+        try { plantWateringChart.destroy(); } catch (e) { }
         plantWateringChart = null;
     }
 
@@ -2677,7 +2725,7 @@ async function renderPlantDetailCharts(plantId) {
         try {
             const response = await fetch(`${API_BASE}/charts/growth/${plantId}`);
             const data = await response.json();
-            
+
             const growthContainer = growthCtx.canvas.parentElement;
             const growthCanvas = growthContainer.querySelector('canvas');
             let existingNoData = growthContainer.querySelector('.no-data-small');
@@ -2733,7 +2781,7 @@ async function renderPlantDetailCharts(plantId) {
             console.error('Failed to load growth chart:', error);
         }
     }
-    
+
     // Watering Chart
     const waterCtx = document.getElementById('plantWateringChart')?.getContext('2d');
     if (waterCtx) {
@@ -2799,9 +2847,9 @@ async function renderPlantDetailCharts(plantId) {
 async function showLabel(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
-    
+
     const displayName = plant.display_name || plant.name;
-    
+
     showModal(`🏷️ Label - ${displayName}`, `
         <div class="label-preview-container">
             <p class="label-instructions">Label designed for 12×40mm stickers (300 DPI)</p>
@@ -2820,7 +2868,7 @@ async function showLabel(plantId) {
             </div>
         </div>
     `);
-    
+
     // Load the label image
     try {
         const response = await fetch(`${API_BASE}/plants/${plantId}/label`);
@@ -2847,7 +2895,7 @@ async function downloadLabel(plantId) {
     const plant = plants.find(p => p.id === plantId);
     const displayName = plant ? (plant.display_name || plant.name) : 'plant';
     const code = plant?.unique_code || plantId;
-    
+
     try {
         const response = await fetch(`${API_BASE}/plants/${plantId}/label`);
         if (response.ok) {
@@ -2874,7 +2922,7 @@ function printLabel(plantId) {
         showToast('Label not loaded yet', 'error');
         return;
     }
-    
+
     const printWindow = window.open('', '_blank');
     printWindow.document.write(`
         <!DOCTYPE html>
@@ -2911,7 +2959,7 @@ function printLabel(plantId) {
 function logGrowth(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
-    
+
     showModal(`📏 Log Growth - ${plant.name}`, `
         <form id="logGrowthForm" data-plant-id="${plantId}">
             <div class="form-row">
@@ -2944,7 +2992,7 @@ function logGrowth(plantId) {
             </div>
         </form>
     `);
-    
+
     document.getElementById('logGrowthForm').addEventListener('submit', handleLogGrowth);
 }
 
@@ -2954,13 +3002,13 @@ async function handleLogGrowth(e) {
     const plantId = form.dataset.plantId;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     // Convert numeric fields
     if (data.height_cm) data.height_cm = parseFloat(data.height_cm);
     if (data.width_cm) data.width_cm = parseFloat(data.width_cm);
     if (data.leaf_count) data.leaf_count = parseInt(data.leaf_count);
     if (data.health_rating) data.health_rating = parseInt(data.health_rating);
-    
+
     try {
         await fetch(`${API_BASE}/plants/${plantId}/growth`, {
             method: 'POST',
@@ -2979,12 +3027,12 @@ async function handleLogGrowth(e) {
 function logWatering(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
-    
+
     // Get available recipes for the dropdown
-    const recipeOptions = recipes.length > 0 
+    const recipeOptions = recipes.length > 0
         ? recipes.map(r => `<option value="${r.name}">${r.name}</option>`).join('')
         : '';
-    
+
     showModal(`💧 Log Watering - ${plant.name}`, `
         <form id="logWateringForm" data-plant-id="${plantId}">
             <div class="form-row">
@@ -3022,18 +3070,18 @@ function logWatering(plantId) {
             </div>
         </form>
     `);
-    
+
     // Show recipe dropdown when compost tea or fertilizer is selected
     const methodSelect = document.getElementById('wateringMethod');
     const recipeGroup = document.getElementById('recipeSelectGroup');
-    
+
     if (methodSelect && recipeGroup) {
         methodSelect.addEventListener('change', () => {
             const showRecipe = ['compost tea', 'fertilizer'].includes(methodSelect.value);
             recipeGroup.classList.toggle('hidden', !showRecipe);
         });
     }
-    
+
     document.getElementById('logWateringForm').addEventListener('submit', handleLogWatering);
 }
 
@@ -3043,17 +3091,17 @@ async function handleLogWatering(e) {
     const plantId = form.dataset.plantId;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     if (data.amount_ml) data.amount_ml = parseFloat(data.amount_ml);
-    
+
     // Include recipe in notes if selected
     if (data.recipe && data.recipe !== '') {
-        data.notes = data.notes 
+        data.notes = data.notes
             ? `${data.notes} | Recipe: ${data.recipe}`
             : `Recipe: ${data.recipe}`;
     }
     delete data.recipe;
-    
+
     try {
         await fetch(`${API_BASE}/plants/${plantId}/watering`, {
             method: 'POST',
@@ -3071,12 +3119,12 @@ async function handleLogWatering(e) {
 function logFertilization(plantId) {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
-    
+
     // Get available recipes for the dropdown
-    const recipeOptions = recipes.length > 0 
+    const recipeOptions = recipes.length > 0
         ? recipes.map(r => `<option value="${r.name}">${r.name}</option>`).join('')
         : '';
-    
+
     showModal(`🧪 Log Fertilization - ${plant.name}`, `
         <form id="logFertilizationForm" data-plant-id="${plantId}">
             <div class="form-group">
@@ -3123,7 +3171,7 @@ function logFertilization(plantId) {
             </div>
         </form>
     `);
-    
+
     document.getElementById('logFertilizationForm').addEventListener('submit', handleLogFertilization);
 }
 
@@ -3133,15 +3181,15 @@ async function handleLogFertilization(e) {
     const plantId = form.dataset.plantId;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     // Include recipe in notes if selected
     if (data.recipe && data.recipe !== '') {
-        data.notes = data.notes 
+        data.notes = data.notes
             ? `${data.notes} | Recipe: ${data.recipe}`
             : `Recipe: ${data.recipe}`;
     }
     delete data.recipe;
-    
+
     try {
         await fetch(`${API_BASE}/plants/${plantId}/fertilization`, {
             method: 'POST',
@@ -3158,7 +3206,7 @@ async function handleLogFertilization(e) {
 
 async function deletePlant(plantId) {
     if (!confirm('Are you sure you want to delete this plant? This cannot be undone.')) return;
-    
+
     try {
         await fetch(`${API_BASE}/plants/${plantId}`, { method: 'DELETE' });
         showToast('Plant deleted', 'success');
@@ -3174,20 +3222,20 @@ async function deletePlant(plantId) {
 async function loadGrowthChart() {
     const ctx = document.getElementById('growthChart')?.getContext('2d');
     if (!ctx) return;
-    
+
     const plantId = elements.growthPlantFilter?.value;
     if (!plantId) {
         if (growthChart) growthChart.destroy();
         ctx.canvas.parentElement.querySelector('canvas').style.display = 'block';
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/charts/growth/${plantId}`);
         const data = await response.json();
-        
+
         if (growthChart) growthChart.destroy();
-        
+
         if (!data.dates?.length) {
             ctx.canvas.style.display = 'none';
             const placeholder = document.createElement('div');
@@ -3196,9 +3244,9 @@ async function loadGrowthChart() {
             ctx.canvas.parentElement.appendChild(placeholder);
             return;
         }
-        
+
         ctx.canvas.style.display = 'block';
-        
+
         growthChart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -3239,23 +3287,23 @@ async function loadGrowthChart() {
 async function loadWateringChart() {
     const ctx = document.getElementById('wateringChart')?.getContext('2d');
     if (!ctx) return;
-    
+
     const plantId = elements.wateringPlantFilter?.value || '';
-    
+
     try {
         const url = plantId ? `${API_BASE}/charts/watering/${plantId}` : `${API_BASE}/charts/watering`;
         const response = await fetch(url);
         const data = await response.json();
-        
+
         if (wateringChart) wateringChart.destroy();
-        
+
         if (!data.dates?.length) {
             ctx.canvas.style.display = 'none';
             return;
         }
-        
+
         ctx.canvas.style.display = 'block';
-        
+
         wateringChart = new Chart(ctx, {
             type: 'bar',
             data: {
@@ -3306,7 +3354,7 @@ async function loadRecipes() {
 
 function renderRecipes() {
     if (!elements.recipesList) return;
-    
+
     if (!recipes.length) {
         elements.recipesList.innerHTML = `
             <div class="empty-state">
@@ -3317,7 +3365,7 @@ function renderRecipes() {
         `;
         return;
     }
-    
+
     elements.recipesList.innerHTML = recipes.map(recipe => `
         <div class="recipe-card">
             <div class="recipe-header">
@@ -3379,10 +3427,10 @@ function showAddRecipeModal() {
             </div>
         </form>
     `);
-    
+
     // Add one initial ingredient row
     addIngredientRow();
-    
+
     document.getElementById('addRecipeForm').addEventListener('submit', handleAddRecipe);
 }
 
@@ -3410,12 +3458,12 @@ function addIngredientRow() {
 async function handleAddRecipe(e) {
     e.preventDefault();
     const form = e.target;
-    
+
     const ingredients = [];
     const names = form.querySelectorAll('[name="ingredient_name[]"]');
     const amounts = form.querySelectorAll('[name="ingredient_amount[]"]');
     const units = form.querySelectorAll('[name="ingredient_unit[]"]');
-    
+
     for (let i = 0; i < names.length; i++) {
         if (names[i].value && amounts[i].value) {
             ingredients.push({
@@ -3425,21 +3473,21 @@ async function handleAddRecipe(e) {
             });
         }
     }
-    
+
     const data = {
         name: form.name.value,
         type: form.type.value,
         description: form.description.value,
         ingredients: ingredients
     };
-    
+
     try {
         const response = await fetch(`${API_BASE}/recipes`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        
+
         if (response.ok) {
             showToast('Recipe saved!', 'success');
             closeModal();
@@ -3456,7 +3504,7 @@ async function handleAddRecipe(e) {
 async function editRecipe(recipeId) {
     const recipe = recipes.find(r => r.id === recipeId);
     if (!recipe) return;
-    
+
     showModal('Edit Recipe', `
         <form id="editRecipeForm" data-recipe-id="${recipeId}">
             <div class="form-group">
@@ -3487,7 +3535,7 @@ async function editRecipe(recipeId) {
             </div>
         </form>
     `);
-    
+
     // Populate existing ingredients
     recipe.ingredients.forEach(ing => {
         const container = document.getElementById('ingredientsList');
@@ -3509,11 +3557,11 @@ async function editRecipe(recipeId) {
         `;
         container.appendChild(row);
     });
-    
+
     if (recipe.ingredients.length === 0) {
         addIngredientRow();
     }
-    
+
     document.getElementById('editRecipeForm').addEventListener('submit', handleEditRecipe);
 }
 
@@ -3521,12 +3569,12 @@ async function handleEditRecipe(e) {
     e.preventDefault();
     const form = e.target;
     const recipeId = form.dataset.recipeId;
-    
+
     const ingredients = [];
     const names = form.querySelectorAll('[name="ingredient_name[]"]');
     const amounts = form.querySelectorAll('[name="ingredient_amount[]"]');
     const units = form.querySelectorAll('[name="ingredient_unit[]"]');
-    
+
     for (let i = 0; i < names.length; i++) {
         if (names[i].value && amounts[i].value) {
             ingredients.push({
@@ -3536,21 +3584,21 @@ async function handleEditRecipe(e) {
             });
         }
     }
-    
+
     const data = {
         name: form.name.value,
         type: form.type.value,
         description: form.description.value,
         ingredients: ingredients
     };
-    
+
     try {
         const response = await fetch(`${API_BASE}/recipes/${recipeId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        
+
         if (response.ok) {
             showToast('Recipe updated!', 'success');
             closeModal();
@@ -3565,7 +3613,7 @@ async function handleEditRecipe(e) {
 
 async function deleteRecipe(recipeId) {
     if (!confirm('Are you sure you want to delete this recipe?')) return;
-    
+
     try {
         await fetch(`${API_BASE}/recipes/${recipeId}`, { method: 'DELETE' });
         showToast('Recipe deleted', 'success');
@@ -3582,10 +3630,10 @@ async function loadBudget() {
             fetch(`${API_BASE}/budget/products`),
             fetch(`${API_BASE}/budget/summary`)
         ]);
-        
+
         products = await productsResponse.json();
         const summary = await summaryResponse.json();
-        
+
         // Update summary cards
         if (elements.totalSpent) {
             elements.totalSpent.textContent = `$${(summary.total_spent || 0).toFixed(2)}`;
@@ -3596,7 +3644,7 @@ async function loadBudget() {
         if (elements.activeRecipes) {
             elements.activeRecipes.textContent = summary.active_recipes || 0;
         }
-        
+
         renderProducts();
         await loadBudgetCharts();
     } catch (error) {
@@ -3606,7 +3654,7 @@ async function loadBudget() {
 
 function renderProducts() {
     if (!elements.productsList) return;
-    
+
     if (!products.length) {
         elements.productsList.innerHTML = `
             <div class="empty-state">
@@ -3617,7 +3665,7 @@ function renderProducts() {
         `;
         return;
     }
-    
+
     elements.productsList.innerHTML = products.map(product => `
         <div class="product-card">
             <div class="product-header">
@@ -3711,7 +3759,7 @@ function showAddProductModal() {
             </div>
         </form>
     `);
-    
+
     document.getElementById('addProductForm').addEventListener('submit', handleAddProduct);
 }
 
@@ -3720,18 +3768,18 @@ async function handleAddProduct(e) {
     const form = e.target;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     // Convert numbers
     if (data.price) data.price = parseFloat(data.price);
     if (data.size_amount) data.size_amount = parseFloat(data.size_amount);
-    
+
     try {
         const response = await fetch(`${API_BASE}/budget/products`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        
+
         if (response.ok) {
             showToast('Product saved!', 'success');
             closeModal();
@@ -3748,7 +3796,7 @@ async function handleAddProduct(e) {
 async function editProduct(productId) {
     const product = products.find(p => p.id === productId);
     if (!product) return;
-    
+
     showModal('Edit Product', `
         <form id="editProductForm" data-product-id="${productId}">
             <div class="form-group">
@@ -3809,7 +3857,7 @@ async function editProduct(productId) {
             </div>
         </form>
     `);
-    
+
     document.getElementById('editProductForm').addEventListener('submit', handleEditProduct);
 }
 
@@ -3819,17 +3867,17 @@ async function handleEditProduct(e) {
     const productId = form.dataset.productId;
     const formData = new FormData(form);
     const data = Object.fromEntries(formData.entries());
-    
+
     if (data.price) data.price = parseFloat(data.price);
     if (data.size_amount) data.size_amount = parseFloat(data.size_amount);
-    
+
     try {
         const response = await fetch(`${API_BASE}/budget/products/${productId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
-        
+
         if (response.ok) {
             showToast('Product updated!', 'success');
             closeModal();
@@ -3844,7 +3892,7 @@ async function handleEditProduct(e) {
 
 async function deleteProduct(productId) {
     if (!confirm('Are you sure you want to delete this product?')) return;
-    
+
     try {
         await fetch(`${API_BASE}/budget/products/${productId}`, { method: 'DELETE' });
         showToast('Product deleted', 'success');
@@ -3858,15 +3906,15 @@ async function loadBudgetCharts() {
     try {
         const response = await fetch(`${API_BASE}/charts/budget`);
         const data = await response.json();
-        
+
         // Category Chart
         const catCtx = document.getElementById('budgetCategoryChart')?.getContext('2d');
         if (catCtx && data.by_category) {
             if (budgetCategoryChart) budgetCategoryChart.destroy();
-            
+
             const categories = Object.keys(data.by_category);
             const values = Object.values(data.by_category);
-            
+
             if (categories.length > 0) {
                 budgetCategoryChart = new Chart(catCtx, {
                     type: 'doughnut',
@@ -3875,7 +3923,7 @@ async function loadBudgetCharts() {
                         datasets: [{
                             data: values,
                             backgroundColor: [
-                                '#22c55e', '#3b82f6', '#f59e0b', 
+                                '#22c55e', '#3b82f6', '#f59e0b',
                                 '#ef4444', '#8b5cf6', '#ec4899'
                             ]
                         }]
@@ -3893,15 +3941,15 @@ async function loadBudgetCharts() {
                 });
             }
         }
-        
+
         // Monthly Chart
         const monthCtx = document.getElementById('budgetMonthlyChart')?.getContext('2d');
         if (monthCtx && data.by_month) {
             if (budgetMonthlyChart) budgetMonthlyChart.destroy();
-            
+
             const months = Object.keys(data.by_month);
             const values = Object.values(data.by_month);
-            
+
             if (months.length > 0) {
                 budgetMonthlyChart = new Chart(monthCtx, {
                     type: 'bar',
@@ -3957,9 +4005,9 @@ function showToast(message, type = 'success') {
         <span class="toast-icon">${type === 'success' ? '✓' : '✕'}</span>
         <span class="toast-message">${message}</span>
     `;
-    
+
     elements.toastContainer.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.style.opacity = '0';
         setTimeout(() => toast.remove(), 300);
@@ -3993,17 +4041,17 @@ function setupMobileMenu() {
         elements.mobileMenuToggle.addEventListener('click', () => {
             elements.sidebar.classList.toggle('open');
         });
-        
+
         // Close sidebar when clicking outside on mobile
         document.addEventListener('click', (e) => {
-            if (window.innerWidth <= 768 && 
+            if (window.innerWidth <= 768 &&
                 elements.sidebar.classList.contains('open') &&
                 !elements.sidebar.contains(e.target) &&
                 !elements.mobileMenuToggle.contains(e.target)) {
                 elements.sidebar.classList.remove('open');
             }
         });
-        
+
         // Close sidebar when navigating on mobile
         elements.navItems.forEach(item => {
             item.addEventListener('click', () => {
@@ -4026,7 +4074,7 @@ function setupScanner() {
             });
         });
     }
-    
+
     // Start/Stop Scanner buttons
     if (elements.startScannerBtn) {
         elements.startScannerBtn.addEventListener('click', startScanner);
@@ -4034,17 +4082,17 @@ function setupScanner() {
     if (elements.stopScannerBtn) {
         elements.stopScannerBtn.addEventListener('click', stopScanner);
     }
-    
+
     // Process scanned note with AI
     if (elements.processScanNoteBtn) {
         elements.processScanNoteBtn.addEventListener('click', processScanNote);
     }
-    
+
     // Clear scan result
     if (elements.clearScanBtn) {
         elements.clearScanBtn.addEventListener('click', clearScanResult);
     }
-    
+
     // Photo capture
     if (elements.photoPreview) {
         elements.photoPreview.addEventListener('click', () => {
@@ -4054,7 +4102,7 @@ function setupScanner() {
     if (elements.plantPhotoInput) {
         elements.plantPhotoInput.addEventListener('change', handlePhotoCapture);
     }
-    
+
     // Create plant from scanner
     if (elements.createScanPlantBtn) {
         elements.createScanPlantBtn.addEventListener('click', createPlantFromScanner);
@@ -4075,7 +4123,7 @@ function switchScannerMode(mode) {
     elements.scannerTabs.forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === mode);
     });
-    
+
     // Update mode visibility
     if (elements.scanMode) {
         elements.scanMode.classList.toggle('active', mode === 'scan');
@@ -4083,7 +4131,7 @@ function switchScannerMode(mode) {
     if (elements.createMode) {
         elements.createMode.classList.toggle('active', mode === 'create');
     }
-    
+
     // Stop scanner when switching to create mode
     if (mode === 'create') {
         stopScanner();
@@ -4096,25 +4144,25 @@ async function startScanner() {
         if (!html5QrCode) {
             html5QrCode = new Html5Qrcode("qrReader");
         }
-        
+
         const config = {
             fps: 10,
             qrbox: { width: 250, height: 250 },
             aspectRatio: 1.0
         };
-        
+
         await html5QrCode.start(
             { facingMode: "environment" },
             config,
             onScanSuccess,
             onScanFailure
         );
-        
+
         // Update UI
         elements.startScannerBtn.classList.add('hidden');
         elements.stopScannerBtn.classList.remove('hidden');
         showToast('Scanner started', 'success');
-        
+
     } catch (error) {
         console.error('Failed to start scanner:', error);
         showToast('Could not start camera. Please allow camera access.', 'error');
@@ -4129,7 +4177,7 @@ async function stopScanner() {
     } catch (error) {
         console.error('Error stopping scanner:', error);
     }
-    
+
     // Update UI
     if (elements.startScannerBtn) {
         elements.startScannerBtn.classList.remove('hidden');
@@ -4141,29 +4189,29 @@ async function stopScanner() {
 
 function onScanSuccess(decodedText, decodedResult) {
     console.log('Scanned:', decodedText);
-    
+
     // Parse the scanned URL
     // Expected format: http://host/plant/CODE-001 or just CODE-001
     let plantCode = decodedText;
-    
+
     // Try to extract code from URL
     const urlMatch = decodedText.match(/\/plant\/([A-Z]{3}-\d+)/i);
     if (urlMatch) {
         plantCode = urlMatch[1];
     }
-    
+
     // Find plant by unique_code
-    const plant = plants.find(p => 
+    const plant = plants.find(p =>
         p.unique_code && p.unique_code.toUpperCase() === plantCode.toUpperCase()
     );
-    
+
     if (plant) {
         // Stop scanner after successful scan
         stopScanner();
-        
+
         // Store scanned plant reference
         scannedPlant = plant;
-        
+
         // Show scan result panel
         showScanResult(plant);
         showToast(`Found: ${plant.display_name || plant.name}`, 'success');
@@ -4183,31 +4231,31 @@ function onScanFailure(error) {
 
 function showScanResult(plant) {
     if (!elements.scanResult) return;
-    
+
     const displayName = plant.display_name || plant.name;
-    
+
     // Populate plant info
     elements.scanPlantName.textContent = displayName;
     elements.scanPlantCode.textContent = plant.unique_code || 'N/A';
     elements.scanPlantStatus.textContent = plant.status;
     elements.scanPlantStatus.className = `scan-plant-status ${plant.status}`;
     elements.scanPlantId.value = plant.id;
-    
+
     // Clear previous note and actions
     elements.scanNoteInput.value = '';
     elements.scanExtractedActions.classList.add('hidden');
     elements.scanExtractedActions.innerHTML = '';
-    
+
     // Show the result panel
     elements.scanResult.classList.remove('hidden');
-    
+
     // Scroll to result
     elements.scanResult.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function clearScanResult() {
     scannedPlant = null;
-    
+
     if (elements.scanResult) {
         elements.scanResult.classList.add('hidden');
     }
@@ -4223,10 +4271,10 @@ function clearScanResult() {
 // Quick action buttons add pre-filled text
 function scanQuickAction(action) {
     if (!scannedPlant) return;
-    
+
     const displayName = scannedPlant.display_name || scannedPlant.name;
     let prefill = '';
-    
+
     switch (action) {
         case 'water':
             prefill = `Watered ${displayName}. `;
@@ -4241,10 +4289,10 @@ function scanQuickAction(action) {
             prefill = `Found issue on ${displayName}: `;
             break;
     }
-    
+
     elements.scanNoteInput.value = prefill;
     elements.scanNoteInput.focus();
-    
+
     // Position cursor where user should type
     const cursorPos = prefill.indexOf('cm') > 0 ? prefill.indexOf('cm') - 1 : prefill.length;
     elements.scanNoteInput.setSelectionRange(cursorPos, cursorPos);
@@ -4252,29 +4300,29 @@ function scanQuickAction(action) {
 
 async function processScanNote() {
     const note = elements.scanNoteInput.value.trim();
-    
+
     if (!note) {
         showToast('Please enter a note first', 'error');
         return;
     }
-    
+
     if (!scannedPlant) {
         showToast('No plant selected', 'error');
         return;
     }
-    
+
     elements.processScanNoteBtn.disabled = true;
     elements.processScanNoteBtn.innerHTML = '<span class="btn-icon">⏳</span> Processing...';
-    
+
     try {
         // Add plant context to the note
         const displayName = scannedPlant.display_name || scannedPlant.name;
         const contextNote = `[For plant: ${displayName} (${scannedPlant.unique_code})] ${note}`;
-        
+
         const response = await fetch(`${API_BASE}/llm/process-note`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 note: contextNote,
                 plant_context: {
                     id: scannedPlant.id,
@@ -4283,9 +4331,9 @@ async function processScanNote() {
                 }
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.extracted_actions && data.extracted_actions.length > 0) {
             // Auto-set plant_id for actions that need it
             data.extracted_actions = data.extracted_actions.map(action => {
@@ -4296,7 +4344,7 @@ async function processScanNote() {
                 }
                 return action;
             });
-            
+
             displayScanExtractedActions(data.extracted_actions);
             showToast(`Found ${data.extracted_actions.length} action(s)`, 'success');
         } else {
@@ -4313,7 +4361,7 @@ async function processScanNote() {
 
 function displayScanExtractedActions(actions) {
     const container = elements.scanExtractedActions;
-    
+
     const actionIcons = {
         'add_plant': '🌱',
         'log_watering': '💧',
@@ -4326,19 +4374,19 @@ function displayScanExtractedActions(actions) {
         'update_plant_status': '📊',
         'add_budget_item': '💰'
     };
-    
+
     let html = `
         <h4>Extracted Actions</h4>
         <div class="actions-list">
     `;
-    
+
     actions.forEach((action, index) => {
         const icon = actionIcons[action.action] || '📝';
         const params = Object.entries(action.parameters || {})
             .filter(([key]) => !['plant_id'].includes(key))
             .map(([key, value]) => `<span class="param">${key}: ${value}</span>`)
             .join('');
-        
+
         html += `
             <div class="action-item">
                 <span class="action-icon">${icon}</span>
@@ -4349,7 +4397,7 @@ function displayScanExtractedActions(actions) {
             </div>
         `;
     });
-    
+
     html += `
         </div>
         <div class="actions-buttons">
@@ -4357,10 +4405,10 @@ function displayScanExtractedActions(actions) {
             <button class="btn btn-primary" onclick="applyScanActions()">Apply All Actions</button>
         </div>
     `;
-    
+
     container.innerHTML = html;
     container.classList.remove('hidden');
-    
+
     // Store actions for applying
     container.dataset.actions = JSON.stringify(actions);
 }
@@ -4368,25 +4416,25 @@ function displayScanExtractedActions(actions) {
 async function applyScanActions() {
     const container = elements.scanExtractedActions;
     const actions = JSON.parse(container.dataset.actions || '[]');
-    
+
     if (actions.length === 0) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/llm/apply-actions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ actions })
         });
-        
+
         const data = await response.json();
-        
+
         showToast(data.message || 'Actions applied successfully!', 'success');
-        
+
         // Clear the scan result and reload data
         clearScanResult();
         await loadPlants();
         await loadDashboardData();
-        
+
     } catch (error) {
         console.error('Failed to apply actions:', error);
         showToast('Failed to apply actions', 'error');
@@ -4402,11 +4450,11 @@ function cancelScanActions() {
 function handlePhotoCapture(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
         capturedPhotoData = e.target.result;
-        
+
         // Update preview
         const preview = elements.photoPreview;
         preview.innerHTML = `<img src="${capturedPhotoData}" alt="Plant photo">`;
@@ -4421,15 +4469,15 @@ async function createPlantFromScanner() {
     const quantity = parseInt(elements.scanQuantityInput?.value) || 1;
     const location = elements.scanLocationInput?.value.trim();
     const notes = elements.scanNotesInput?.value.trim();
-    
+
     if (!name) {
         showToast('Please enter a plant name', 'error');
         return;
     }
-    
+
     elements.createScanPlantBtn.disabled = true;
     elements.createScanPlantBtn.textContent = 'Creating...';
-    
+
     try {
         const plantData = {
             name,
@@ -4439,33 +4487,33 @@ async function createPlantFromScanner() {
             notes,
             date_planted: new Date().toISOString().split('T')[0]
         };
-        
+
         const response = await fetch(`${API_BASE}/plants`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(plantData)
         });
-        
+
         const data = await response.json();
-        
+
         if (data.id || data.ids) {
             const plantId = data.id || data.ids[0];
-            
+
             // If we have a photo, upload it
             if (capturedPhotoData && plantId) {
                 await uploadPlantPhoto(plantId, capturedPhotoData);
             }
-            
+
             showToast('Plant created! Generating QR code...', 'success');
-            
+
             // Reload plants and show the label
             await loadPlants();
-            
+
             // Show the QR label for the new plant
             setTimeout(() => {
                 showLabel(plantId);
             }, 500);
-            
+
             // Reset form
             resetScannerCreateForm();
         }
@@ -4485,7 +4533,7 @@ async function uploadPlantPhoto(plantId, photoData) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_data: photoData })
         });
-        
+
         if (response.ok) {
             console.log('Photo uploaded successfully');
         }
@@ -4502,7 +4550,7 @@ function resetScannerCreateForm() {
     if (elements.scanLocationInput) elements.scanLocationInput.value = '';
     if (elements.scanNotesInput) elements.scanNotesInput.value = '';
     if (elements.plantPhotoInput) elements.plantPhotoInput.value = '';
-    
+
     // Reset photo preview
     if (elements.photoPreview) {
         elements.photoPreview.innerHTML = `
@@ -4511,6 +4559,6 @@ function resetScannerCreateForm() {
         `;
         elements.photoPreview.classList.remove('has-image');
     }
-    
+
     capturedPhotoData = null;
 }

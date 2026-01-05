@@ -3204,17 +3204,36 @@ async function handleLogFertilization(e) {
     }
 }
 
-async function deletePlant(plantId) {
-    if (!confirm('Are you sure you want to delete this plant? This cannot be undone.')) return;
+function deletePlant(plantId) {
+    const plant = plants.find(p => p.id === plantId);
+    const name = plant ? (plant.display_name || plant.name) : 'this plant';
 
+    showModal('⚠️ Delete Plant', `
+        <div class="delete-confirmation">
+            <p>Are you sure you want to delete <strong>${name}</strong>?</p>
+            <p class="warning-text" style="color: var(--danger); margin: 15px 0;">This action cannot be undone. All logs and history for this plant will be removed.</p>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="viewPlant('${plantId}')">Cancel</button>
+                <button class="btn btn-danger" onclick="executeDeletePlant('${plantId}')">Yes, Delete Permanently</button>
+            </div>
+        </div>
+    `);
+}
+
+async function executeDeletePlant(plantId) {
     try {
-        await fetch(`${API_BASE}/plants/${plantId}`, { method: 'DELETE' });
-        showToast('Plant deleted', 'success');
-        closeModal();
-        await loadPlants();
-        await loadDashboardData();
+        const response = await fetch(`${API_BASE}/plants/${plantId}`, { method: 'DELETE' });
+        if (response.ok) {
+            showToast('Plant deleted', 'success');
+            closeModal();
+            await loadPlants();
+            await loadDashboardData();
+        } else {
+            throw new Error('Failed to delete');
+        }
     } catch (error) {
         showToast('Failed to delete plant', 'error');
+        viewPlant(plantId); // Go back to view on error
     }
 }
 

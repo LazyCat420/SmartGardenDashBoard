@@ -28,7 +28,7 @@ from md_service import (
     create_harvest, get_harvests,
     create_pest_issue, get_pest_issues,
     # Tasks
-    create_task, get_task, list_tasks, complete_task, delete_task,
+    create_task, get_task, list_tasks, complete_task, update_task, delete_task,
     # Weather
     create_weather_log, list_weather_logs,
     # Notes
@@ -1118,6 +1118,16 @@ def get_task_endpoint(task_id):
     if not task:
         return jsonify({'error': 'Task not found'}), 404
     return jsonify(task)
+
+
+@app.route('/api/tasks/<task_id>', methods=['PUT'])
+def update_task_endpoint(task_id):
+    """Update a task (including completion status)"""
+    data = request.json
+    task = update_task(task_id, data)
+    if task:
+        return jsonify(task)
+    return jsonify({'error': 'Task not found'}), 404
 
 
 @app.route('/api/tasks/<task_id>/complete', methods=['PUT'])

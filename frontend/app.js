@@ -61,6 +61,17 @@ const elements = {
     llmSettingsOverlay: document.getElementById('llmSettingsOverlay'),
     llmSettingsClose: document.getElementById('llmSettingsClose'),
     llmUrlInput: document.getElementById('llmUrlInput'),
+
+    // Pages
+    dashboardPage: document.getElementById('dashboardPage'),
+    plantsPage: document.getElementById('plantsPage'),
+    tasksPage: document.getElementById('tasksPage'),
+    harvestsPage: document.getElementById('harvestsPage'),
+    notesPage: document.getElementById('notesPage'),
+    weatherPage: document.getElementById('weatherPage'),
+    settingsPage: document.getElementById('settingsPage'),
+    leaderboardPage: document.getElementById('leaderboardPage'),
+    budgetPage: document.getElementById('budgetPage'),
     llmModelInput: document.getElementById('llmModelInput'),
     llmModelSelect: document.getElementById('llmModelSelect'),
     contextLengthInput: document.getElementById('contextLengthInput'),
@@ -945,13 +956,17 @@ function renderUpcomingTasks(taskList) {
 
     elements.upcomingTasks.innerHTML = taskList.map(task => {
         const dueDate = task.due_date ? new Date(task.due_date) : null;
-        const isOverdue = dueDate && dueDate < new Date();
+        const isOverdue = dueDate && dueDate < new Date() && !task.completed;
+        const isCompleted = task.completed === true;
 
         return `
             <div class="task-item">
-                <div class="task-checkbox" onclick="completeTask('${task.id}')"></div>
+                <div class="task-checkbox ${isCompleted ? 'checked' : ''}" 
+                     onclick="toggleTaskCompletion('${task.id}', ${isCompleted})"></div>
                 <div class="task-content">
-                    <div class="task-title">${task.title}</div>
+                    <div class="task-title" style="${isCompleted ? 'text-decoration: line-through; opacity: 0.7;' : ''}">
+                        ${task.title}
+                    </div>
                     <div class="task-due ${isOverdue ? 'overdue' : ''}">
                         ${dueDate ? formatDate(dueDate) : 'No due date'}
                     </div>
@@ -1637,14 +1652,14 @@ function renderTasks(taskList) {
     elements.tasksList.innerHTML = taskList.map(task => {
         const dueDate = task.due_date ? new Date(task.due_date) : null;
         const isOverdue = dueDate && dueDate < new Date() && !task.completed;
+        const isCompleted = task.completed === true;
 
         return `
             <div class="task-item">
-                <div class="task-checkbox ${task.completed ? 'checked' : ''}" 
-                     onclick="completeTask('${task.id}')"
-                     ${task.completed ? 'style="pointer-events:none"' : ''}></div>
+                <div class="task-checkbox ${isCompleted ? 'checked' : ''}" 
+                     onclick="toggleTaskCompletion('${task.id}', ${isCompleted})"></div>
                 <div class="task-content">
-                    <div class="task-title" style="${task.completed ? 'text-decoration: line-through; opacity: 0.6' : ''}">
+                    <div class="task-title" style="${isCompleted ? 'text-decoration: line-through; opacity: 0.6' : ''}">
                         ${task.title}
                     </div>
                     <div class="task-due ${isOverdue ? 'overdue' : ''}">
@@ -1659,14 +1674,25 @@ function renderTasks(taskList) {
     }).join('');
 }
 
-async function completeTask(taskId) {
+async function toggleTaskCompletion(taskId, currentStatus) {
     try {
-        await fetch(`${API_BASE}/tasks/${taskId}/complete`, { method: 'PUT' });
-        showToast('Task completed!', 'success');
-        await loadTasks();
+        const newStatus = !currentStatus;
+        await fetch(`${API_BASE}/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ completed: newStatus })
+        });
+
+        showToast(newStatus ? 'Task completed!' : 'Task unmarked', 'success');
+
+        // Refresh data where appropriate
+        if (!elements.tasksPage.classList.contains('hidden')) {
+            await loadTasks();
+        }
         await loadDashboardData();
     } catch (error) {
-        showToast('Failed to complete task', 'error');
+        console.error('Toggle task error:', error);
+        showToast('Failed to update task', 'error');
     }
 }
 
@@ -4036,7 +4062,7 @@ function showToast(message, type = 'success') {
 // Make functions available globally for inline handlers
 window.applyActions = applyActions;
 window.cancelActions = cancelActions;
-window.completeTask = completeTask;
+window.toggleTaskCompletion = toggleTaskCompletion;
 window.deleteTask = deleteTask;
 window.viewPlant = viewPlant;
 window.logGrowth = logGrowth;

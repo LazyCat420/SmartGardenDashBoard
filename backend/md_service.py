@@ -1138,7 +1138,26 @@ def complete_task(task_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def update_task(task_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update a task"""
+    base = get_storage_path()
+    for filepath in (base / 'tasks').glob('*.md'):
+        data = read_md_file(filepath)
+        if data and data['metadata'].get('id') == task_id:
+            # Handle completion date
+            if 'completed' in updates:
+                if updates['completed'] and not data['metadata'].get('completed'):
+                     updates['completed_date'] = datetime.now().isoformat()
+                elif not updates['completed']:
+                     updates['completed_date'] = None
+            
+            if update_md_file(filepath, updates):
+                return get_task(task_id)
+    return None
+
+
 def delete_task(task_id: str) -> bool:
+
     """Delete a task"""
     base = get_storage_path()
     for filepath in (base / 'tasks').glob('*.md'):

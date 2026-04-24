@@ -285,25 +285,27 @@ LLM_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'll
 
 def load_llm_settings() -> Dict[str, str]:
     """Load LLM settings from file or return defaults."""
-    defaults = { 'url': LMSTUDIO_URL, 'model': MODEL_NAME }
+    defaults = { 'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio' }
     try:
         if os.path.exists(LLM_SETTINGS_FILE):
             with open(LLM_SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
-                return { 'url': settings.get('url', LMSTUDIO_URL), 'model': settings.get('model', MODEL_NAME) }
+                return { 'url': settings.get('url', LMSTUDIO_URL), 'model': settings.get('model', MODEL_NAME), 'api_key': settings.get('api_key', ''), 'endpoint_type': settings.get('endpoint_type', 'lmstudio') }
     except Exception as e:
         print('Failed to load LLM settings:', e)
     return defaults
 
-def save_llm_settings(url: str, model: str) -> bool:
+def save_llm_settings(url: str, model: str, api_key: str = '', endpoint_type: str = 'lmstudio') -> bool:
     try:
-        settings = { 'url': url, 'model': model }
+        settings = { 'url': url, 'model': model, 'api_key': api_key, 'endpoint_type': endpoint_type }
         with open(LLM_SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=2)
         # Update module-level vars
-        global LMSTUDIO_URL, MODEL_NAME
+        global LMSTUDIO_URL, MODEL_NAME, API_KEY, ENDPOINT_TYPE
         LMSTUDIO_URL = url
         MODEL_NAME = model
+        API_KEY = api_key
+        ENDPOINT_TYPE = endpoint_type
         return True
     except Exception as e:
         return False
@@ -313,8 +315,12 @@ try:
     _startup_settings = load_llm_settings()
     LMSTUDIO_URL = _startup_settings.get('url', LMSTUDIO_URL)
     MODEL_NAME = _startup_settings.get('model', MODEL_NAME)
-    print(f"Startup: Loaded LLM settings - URL: {LMSTUDIO_URL}, Model: {MODEL_NAME}")
+    API_KEY = _startup_settings.get('api_key', '')
+    ENDPOINT_TYPE = _startup_settings.get('endpoint_type', 'lmstudio')
+    print(f"Startup: Loaded LLM settings - URL: {LMSTUDIO_URL}, Model: {MODEL_NAME}, Type: {ENDPOINT_TYPE}")
 except Exception as e:
+    API_KEY = ''
+    ENDPOINT_TYPE = 'lmstudio'
     print(f"Startup: Failed to load LLM settings: {e}")
 
 
@@ -418,16 +424,19 @@ RULES:
             "tools": GARDEN_TOOLS,
             "tool_choice": "auto",
             "temperature": 0.7,
-            "max_tokens": -1,
             "stream": False
         }
         
-        print("\n=== LLM REQUEST PAYLOAD ===")
-        print(json.dumps(payload, indent=2))
-        print("===========================\n")
+        if ENDPOINT_TYPE != 'vllm':
+            payload["max_tokens"] = -1
         
+        headers = {"Content-Type": "application/json"}
+        if API_KEY:
+            headers["Authorization"] = f"Bearer {API_KEY}"
+            
         response = requests.post(
             LMSTUDIO_URL,
+            headers=headers,
             json=payload,
             timeout=60
         )
@@ -503,7 +512,11 @@ def test_tools():
             "temperature": 0.1
         }
         
-        response = requests.post(LMSTUDIO_URL, json=payload, timeout=10)
+        headers = {"Content-Type": "application/json"}
+        if API_KEY:
+            headers["Authorization"] = f"Bearer {API_KEY}"
+            
+        response = requests.post(LMSTUDIO_URL, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             result = response.json()
@@ -532,7 +545,9 @@ def get_llm_settings():
     return jsonify({
         'url': settings.get('url', LMSTUDIO_URL),
         'model': settings.get('model', MODEL_NAME),
-        'defaults': {'url': LMSTUDIO_URL, 'model': MODEL_NAME}
+        'api_key': settings.get('api_key', ''),
+        'endpoint_type': settings.get('endpoint_type', 'lmstudio'),
+        'defaults': {'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio'}
     })
 
 
@@ -541,9 +556,11 @@ def update_llm_settings():
     data = request.json or {}
     url = data.get('url', LMSTUDIO_URL)
     model = data.get('model', MODEL_NAME)
+    api_key = data.get('api_key', '')
+    endpoint_type = data.get('endpoint_type', 'lmstudio')
 
-    if save_llm_settings(url, model):
-        return jsonify({'success': True, 'url': url, 'model': model})
+    if save_llm_settings(url, model, api_key, endpoint_type):
+        return jsonify({'success': True, 'url': url, 'model': model, 'endpoint_type': endpoint_type})
     return jsonify({'success': False, 'message': 'Failed to save settings'}), 500
 
 

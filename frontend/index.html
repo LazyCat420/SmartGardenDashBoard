@@ -527,9 +527,20 @@
                 <div class="settings-section">
                     <h4>API Configuration</h4>
                     <div class="form-group">
+                        <label for="llmEndpointType">Endpoint Type</label>
+                        <select id="llmEndpointType">
+                            <option value="lmstudio">LMStudio (Local)</option>
+                            <option value="vllm">vLLM (Docker / Remote)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label for="llmUrlInput">API Endpoint URL</label>
                         <input type="text" id="llmUrlInput" placeholder="http://localhost:1234/v1/chat/completions">
                         <small class="form-hint">Default: http://localhost:1234/v1/chat/completions</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="llmApiKeyInput">API Key (Optional)</label>
+                        <input type="password" id="llmApiKeyInput" placeholder="Enter API Key or leave blank">
                     </div>
                     <div class="form-group">
                         <label for="llmModelSelect">Model</label>

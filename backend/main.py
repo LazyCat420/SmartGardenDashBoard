@@ -1173,9 +1173,20 @@ def get_dashboard_stats():
 @app.route('/api/llm/status', methods=['GET'])
 def llm_status():
     try:
+        settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+        api_key = ""
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                settings = json.load(f)
+                api_key = settings.get("api_key", "")
+                
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            
         response = requests.post(
             LMSTUDIO_URL,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             json={
                 "model": MODEL_NAME,
                 "messages": [{"role": "user", "content": "Hi"}],
@@ -1201,6 +1212,8 @@ def get_llm_settings():
             settings = {
                 "url": "http://localhost:1234/v1/chat/completions",
                 "model": "ibm-granite/granite-3.3-8b-instruct",
+                "api_key": "",
+                "endpoint_type": "lmstudio",
                 "context_length": 8192,
                 "gpu_layers": 35,
                 "cpu_threads": 8
@@ -1211,6 +1224,8 @@ def get_llm_settings():
             "defaults": {
                 "url": "http://localhost:1234/v1/chat/completions",
                 "model": "ibm-granite/granite-3.3-8b-instruct",
+                "api_key": "",
+                "endpoint_type": "lmstudio",
                 "context_length": 8192,
                 "gpu_layers": 35,
                 "cpu_threads": 8
@@ -1228,6 +1243,8 @@ def save_llm_settings():
         settings = {
             "url": data.get("url", "http://localhost:1234/v1/chat/completions"),
             "model": data.get("model", "ibm-granite/granite-3.3-8b-instruct"),
+            "api_key": data.get("api_key", ""),
+            "endpoint_type": data.get("endpoint_type", "lmstudio"),
             "context_length": data.get("context_length", 8192),
             "gpu_layers": data.get("gpu_layers", 35),
             "cpu_threads": data.get("cpu_threads", 8)
@@ -1294,9 +1311,20 @@ def process_note():
     )
     
     try:
+        settings_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_settings.json')
+        api_key = ""
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                settings = json.load(f)
+                api_key = settings.get("api_key", "")
+                
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            
         response = requests.post(
             LMSTUDIO_URL,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             json={
                 "model": MODEL_NAME,
                 "messages": [

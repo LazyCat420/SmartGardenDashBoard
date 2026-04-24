@@ -61,6 +61,8 @@ const elements = {
     llmSettingsOverlay: document.getElementById('llmSettingsOverlay'),
     llmSettingsClose: document.getElementById('llmSettingsClose'),
     llmUrlInput: document.getElementById('llmUrlInput'),
+    llmEndpointType: document.getElementById('llmEndpointType'),
+    llmApiKeyInput: document.getElementById('llmApiKeyInput'),
 
     // Pages
     dashboardPage: document.getElementById('dashboardPage'),
@@ -503,6 +505,8 @@ async function openLLMSettings() {
         const data = await response.json();
 
         elements.llmUrlInput.value = data.url || '';
+        if (elements.llmApiKeyInput) elements.llmApiKeyInput.value = data.api_key || '';
+        if (elements.llmEndpointType) elements.llmEndpointType.value = data.endpoint_type || 'lmstudio';
         elements.llmModelInput.value = data.model || '';
         currentModel = data.model || '';
         elements.llmUrlInput.placeholder = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
@@ -638,6 +642,8 @@ async function testToolCalling() {
 
 async function saveLLMSettings() {
     const url = elements.llmUrlInput.value.trim();
+    const endpoint_type = elements.llmEndpointType?.value || 'lmstudio';
+    const api_key = elements.llmApiKeyInput?.value.trim() || '';
     // Prefer custom text input if present, otherwise use selection
     const selected = elements.llmModelSelect?.value || '';
     const model = (elements.llmModelInput.value.trim() || selected).trim();
@@ -662,6 +668,8 @@ async function saveLLMSettings() {
             body: JSON.stringify({
                 url,
                 model,
+                api_key,
+                endpoint_type,
                 context_length,
                 gpu_layers,
                 cpu_threads
@@ -694,6 +702,8 @@ async function resetLLMSettings() {
 
         elements.llmUrlInput.value = data.defaults?.url || 'http://localhost:1234/v1/chat/completions';
         elements.llmModelInput.value = data.defaults?.model || 'ibm-granite/granite-3.3-8b-instruct';
+        if (elements.llmApiKeyInput) elements.llmApiKeyInput.value = data.defaults?.api_key || '';
+        if (elements.llmEndpointType) elements.llmEndpointType.value = data.defaults?.endpoint_type || 'lmstudio';
 
         // Reset new settings
         const defaultContextLength = data.defaults?.context_length || 8192;

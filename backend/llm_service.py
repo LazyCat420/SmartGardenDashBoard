@@ -47,18 +47,22 @@ def load_llm_settings() -> Dict[str, Any]:
     return {
         "url": DEFAULT_LMSTUDIO_URL,
         "model": DEFAULT_MODEL_NAME,
+        "api_key": "",
+        "endpoint_type": "lmstudio",
         "context_length": DEFAULT_CONTEXT_LENGTH,
         "gpu_layers": DEFAULT_GPU_LAYERS,
         "cpu_threads": DEFAULT_CPU_THREADS
     }
 
-def save_llm_settings(url: str, model: str, context_length: int = None, 
+def save_llm_settings(url: str, model: str, api_key: str = "", endpoint_type: str = "lmstudio", context_length: int = None, 
                       gpu_layers: int = None, cpu_threads: int = None) -> bool:
     """Save LLM settings to file."""
     try:
         settings = {
             "url": url, 
-            "model": model
+            "model": model,
+            "api_key": api_key,
+            "endpoint_type": endpoint_type
         }
         if context_length is not None:
             settings["context_length"] = context_length
@@ -79,6 +83,8 @@ def save_llm_settings(url: str, model: str, context_length: int = None,
 _settings = load_llm_settings()
 LMSTUDIO_URL = _settings.get("url", DEFAULT_LMSTUDIO_URL)
 MODEL_NAME = _settings.get("model", DEFAULT_MODEL_NAME)
+API_KEY = _settings.get("api_key", "")
+ENDPOINT_TYPE = _settings.get("endpoint_type", "lmstudio")
 CONTEXT_LENGTH = _settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
 GPU_LAYERS = _settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
 CPU_THREADS = _settings.get("cpu_threads", DEFAULT_CPU_THREADS)
@@ -469,26 +475,30 @@ Extract all relevant information and make the appropriate function calls."""
 
 
 class LLMService:
-    def __init__(self, base_url: str = None, model: str = None, context_length: int = None, 
+    def __init__(self, base_url: str = None, model: str = None, api_key: str = None, endpoint_type: str = None, context_length: int = None, 
                  gpu_layers: int = None, cpu_threads: int = None):
         # Always load fresh settings
         settings = load_llm_settings()
         self.base_url = base_url or settings.get("url", DEFAULT_LMSTUDIO_URL)
         self.model = model or settings.get("model", DEFAULT_MODEL_NAME)
+        self.api_key = api_key if api_key is not None else settings.get("api_key", "")
+        self.endpoint_type = endpoint_type if endpoint_type is not None else settings.get("endpoint_type", "lmstudio")
         self.context_length = context_length if context_length is not None else settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
         self.gpu_layers = gpu_layers if gpu_layers is not None else settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
         self.cpu_threads = cpu_threads if cpu_threads is not None else settings.get("cpu_threads", DEFAULT_CPU_THREADS)
-        llm_logger.info(f"LLMService initialized - URL: {self.base_url}, Model: {self.model}, Context: {self.context_length}, GPU Layers: {self.gpu_layers}, CPU Threads: {self.cpu_threads}")
+        llm_logger.info(f"LLMService initialized - URL: {self.base_url}, Model: {self.model}, Type: {self.endpoint_type}, Context: {self.context_length}")
     
     def reload_settings(self):
         """Reload settings from file."""
         settings = load_llm_settings()
         self.base_url = settings.get("url", DEFAULT_LMSTUDIO_URL)
         self.model = settings.get("model", DEFAULT_MODEL_NAME)
+        self.api_key = settings.get("api_key", "")
+        self.endpoint_type = settings.get("endpoint_type", "lmstudio")
         self.context_length = settings.get("context_length", DEFAULT_CONTEXT_LENGTH)
         self.gpu_layers = settings.get("gpu_layers", DEFAULT_GPU_LAYERS)
         self.cpu_threads = settings.get("cpu_threads", DEFAULT_CPU_THREADS)
-        llm_logger.info(f"Settings reloaded - URL: {self.base_url}, Model: {self.model}, Context: {self.context_length}, GPU Layers: {self.gpu_layers}, CPU Threads: {self.cpu_threads}")
+        llm_logger.info(f"Settings reloaded - URL: {self.base_url}, Model: {self.model}, Type: {self.endpoint_type}")
     
     def extract_garden_data(self, note_text: str, existing_plants: List[str] = None) -> Dict[str, Any]:
         """
@@ -517,12 +527,19 @@ class LLMService:
             ],
             "tools": GARDEN_TOOLS,
             "tool_choice": "auto",
-            "temperature": 0.3,
-            "max_tokens": 2000,
-            "n_ctx": self.context_length,
-            "n_gpu_layers": self.gpu_layers,
-            "n_threads": self.cpu_threads
+            "temperature": 0.3
         }
+        
+        # Add vLLM vs LMStudio specific parameters
+        if self.endpoint_type != "vllm":
+            request_payload["max_tokens"] = 2000
+            request_payload["n_ctx"] = self.context_length
+            request_payload["n_gpu_layers"] = self.gpu_layers
+            request_payload["n_threads"] = self.cpu_threads
+        else:
+            # vLLM requires max_tokens >= 1 if provided, but it's often better to let it use the model default
+            # We explicitly don't pass -1 or LMStudio-specific threading parameters
+            pass
         
         llm_logger.debug(f"=== LLM REQUEST ===")
         llm_logger.debug(f"URL: {self.base_url}")
@@ -533,9 +550,14 @@ class LLMService:
         
         try:
             llm_logger.info(f"Sending request to {self.base_url}...")
+            
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+                
             response = requests.post(
                 self.base_url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json=request_payload,
                 timeout=60
             )
@@ -711,9 +733,14 @@ class LLMService:
         try:
             # First, try a simple request
             llm_logger.debug("Sending test request...")
+            
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+                
             response = requests.post(
                 self.base_url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json={
                     "model": self.model,
                     "messages": [
@@ -790,9 +817,13 @@ class LLMService:
         }]
         
         try:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+                
             response = requests.post(
                 self.base_url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json={
                     "model": self.model,
                     "messages": [
@@ -800,10 +831,9 @@ class LLMService:
                     ],
                     "tools": simple_tool,
                     "tool_choice": "auto",
-                    "temperature": 0.1,
-                    "max_tokens": 100
+                    "temperature": 0.1
                 },
-                timeout=30
+                timeout=15
             )
             
             llm_logger.debug(f"Tool test response: {response.text[:1000]}")

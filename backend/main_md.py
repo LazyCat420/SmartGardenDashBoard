@@ -285,27 +285,28 @@ LLM_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'll
 
 def load_llm_settings() -> Dict[str, str]:
     """Load LLM settings from file or return defaults."""
-    defaults = { 'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio' }
+    defaults = { 'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio', 'camera_node_url': 'http://192.168.1.100:5001' }
     try:
         if os.path.exists(LLM_SETTINGS_FILE):
             with open(LLM_SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
-                return { 'url': settings.get('url', LMSTUDIO_URL), 'model': settings.get('model', MODEL_NAME), 'api_key': settings.get('api_key', ''), 'endpoint_type': settings.get('endpoint_type', 'lmstudio') }
+                return { 'url': settings.get('url', LMSTUDIO_URL), 'model': settings.get('model', MODEL_NAME), 'api_key': settings.get('api_key', ''), 'endpoint_type': settings.get('endpoint_type', 'lmstudio'), 'camera_node_url': settings.get('camera_node_url', 'http://192.168.1.100:5001') }
     except Exception as e:
         print('Failed to load LLM settings:', e)
     return defaults
 
-def save_llm_settings(url: str, model: str, api_key: str = '', endpoint_type: str = 'lmstudio') -> bool:
+def save_llm_settings(url: str, model: str, api_key: str = '', endpoint_type: str = 'lmstudio', camera_node_url: str = 'http://192.168.1.100:5001') -> bool:
     try:
-        settings = { 'url': url, 'model': model, 'api_key': api_key, 'endpoint_type': endpoint_type }
+        settings = { 'url': url, 'model': model, 'api_key': api_key, 'endpoint_type': endpoint_type, 'camera_node_url': camera_node_url }
         with open(LLM_SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=2)
         # Update module-level vars
-        global LMSTUDIO_URL, MODEL_NAME, API_KEY, ENDPOINT_TYPE
+        global LMSTUDIO_URL, MODEL_NAME, API_KEY, ENDPOINT_TYPE, CAMERA_NODE_URL
         LMSTUDIO_URL = url
         MODEL_NAME = model
         API_KEY = api_key
         ENDPOINT_TYPE = endpoint_type
+        CAMERA_NODE_URL = camera_node_url
         return True
     except Exception as e:
         return False
@@ -317,10 +318,12 @@ try:
     MODEL_NAME = _startup_settings.get('model', MODEL_NAME)
     API_KEY = _startup_settings.get('api_key', '')
     ENDPOINT_TYPE = _startup_settings.get('endpoint_type', 'lmstudio')
+    CAMERA_NODE_URL = _startup_settings.get('camera_node_url', 'http://192.168.1.100:5001')
     print(f"Startup: Loaded LLM settings - URL: {LMSTUDIO_URL}, Model: {MODEL_NAME}, Type: {ENDPOINT_TYPE}")
 except Exception as e:
     API_KEY = ''
     ENDPOINT_TYPE = 'lmstudio'
+    CAMERA_NODE_URL = 'http://192.168.1.100:5001'
     print(f"Startup: Failed to load LLM settings: {e}")
 
 
@@ -547,7 +550,8 @@ def get_llm_settings():
         'model': settings.get('model', MODEL_NAME),
         'api_key': settings.get('api_key', ''),
         'endpoint_type': settings.get('endpoint_type', 'lmstudio'),
-        'defaults': {'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio'}
+        'camera_node_url': settings.get('camera_node_url', CAMERA_NODE_URL),
+        'defaults': {'url': LMSTUDIO_URL, 'model': MODEL_NAME, 'api_key': '', 'endpoint_type': 'lmstudio', 'camera_node_url': 'http://192.168.1.100:5001'}
     })
 
 
@@ -558,10 +562,86 @@ def update_llm_settings():
     model = data.get('model', MODEL_NAME)
     api_key = data.get('api_key', '')
     endpoint_type = data.get('endpoint_type', 'lmstudio')
+    camera_node_url = data.get('camera_node_url', 'http://192.168.1.100:5001')
 
-    if save_llm_settings(url, model, api_key, endpoint_type):
-        return jsonify({'success': True, 'url': url, 'model': model, 'endpoint_type': endpoint_type})
+    if save_llm_settings(url, model, api_key, endpoint_type, camera_node_url):
+        return jsonify({'success': True, 'url': url, 'model': model, 'endpoint_type': endpoint_type, 'camera_node_url': camera_node_url})
     return jsonify({'success': False, 'message': 'Failed to save settings'}), 500
+
+
+import base64
+
+@app.route('/api/camera/snapshot', methods=['GET'])
+def get_camera_snapshot():
+    """Fetch a snapshot from the Raspberry Pi camera node."""
+    try:
+        if not CAMERA_NODE_URL:
+            return jsonify({'success': False, 'message': 'Camera Node URL not configured'}), 400
+        
+        response = requests.get(f"{CAMERA_NODE_URL.rstrip('/')}/snapshot", timeout=10)
+        if response.status_code == 200:
+            return Response(response.content, mimetype='image/jpeg')
+        return jsonify({'success': False, 'message': f'Camera node returned {response.status_code}'}), 502
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error connecting to camera node: {str(e)}'}), 500
+
+@app.route('/api/camera/analyze', methods=['POST'])
+def analyze_camera_snapshot():
+    """Fetch a snapshot and send it to vLLM for analysis."""
+    try:
+        data = request.json or {}
+        prompt = data.get('prompt', 'What do you see in this garden image?')
+        
+        if not CAMERA_NODE_URL:
+            return jsonify({'success': False, 'message': 'Camera Node URL not configured'}), 400
+            
+        # 1. Fetch Snapshot
+        cam_response = requests.get(f"{CAMERA_NODE_URL.rstrip('/')}/snapshot", timeout=10)
+        if cam_response.status_code != 200:
+            return jsonify({'success': False, 'message': 'Failed to fetch camera snapshot'}), 502
+            
+        base64_image = base64.b64encode(cam_response.content).decode('utf-8')
+        
+        # 2. Build Vision Payload
+        payload = {
+            "model": MODEL_NAME,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.3,
+            "stream": False
+        }
+        
+        if ENDPOINT_TYPE != 'vllm':
+            payload["max_tokens"] = -1
+            
+        headers = {"Content-Type": "application/json"}
+        if API_KEY:
+            headers["Authorization"] = f"Bearer {API_KEY}"
+            
+        # 3. Send to vLLM
+        llm_response = requests.post(LMSTUDIO_URL, headers=headers, json=payload, timeout=60)
+        
+        if llm_response.status_code == 200:
+            result = llm_response.json()
+            message = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            return jsonify({'success': True, 'analysis': message})
+        else:
+            return jsonify({'success': False, 'message': 'Vision analysis failed', 'error': llm_response.text}), 500
+            
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Server Error: {str(e)}'}), 500
 
 
 @app.route('/api/llm/apply-actions', methods=['POST'])

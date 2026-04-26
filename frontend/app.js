@@ -71,6 +71,7 @@ const elements = {
     harvestsPage: document.getElementById('harvestsPage'),
     notesPage: document.getElementById('notesPage'),
     weatherPage: document.getElementById('weatherPage'),
+    cameraPage: document.getElementById('cameraPage'),
     settingsPage: document.getElementById('settingsPage'),
     leaderboardPage: document.getElementById('leaderboardPage'),
     budgetPage: document.getElementById('budgetPage'),
@@ -195,7 +196,16 @@ const elements = {
     scanQuantityInput: document.getElementById('scanQuantityInput'),
     scanLocationInput: document.getElementById('scanLocationInput'),
     scanNotesInput: document.getElementById('scanNotesInput'),
-    createScanPlantBtn: document.getElementById('createScanPlantBtn')
+    createScanPlantBtn: document.getElementById('createScanPlantBtn'),
+
+    // Camera Page
+    refreshCameraBtn: document.getElementById('refreshCameraBtn'),
+    cameraFeed: document.getElementById('cameraFeed'),
+    cameraLoading: document.getElementById('cameraLoading'),
+    visionPromptInput: document.getElementById('visionPromptInput'),
+    analyzeCameraBtn: document.getElementById('analyzeCameraBtn'),
+    visionAnalysisResult: document.getElementById('visionAnalysisResult'),
+    visionAnalysisContent: document.getElementById('visionAnalysisContent')
 };
 
 // ============== Initialization ==============
@@ -349,6 +359,7 @@ function navigateTo(page) {
         notes: 'Garden Notes',
         weather: 'Weather Log',
         scanner: 'Plant Scanner',
+        camera: 'Garden Camera',
         leaderboard: 'Leaderboard'
     };
     elements.pageTitle.textContent = titles[page] || page;
@@ -386,9 +397,83 @@ async function loadPageData(page) {
         case 'scanner':
             initScannerPage();
             break;
+        case 'camera':
+            initCameraPage();
+            break;
         case 'leaderboard':
             await loadLeaderboard();
             break;
+    }
+}
+
+// ============== Camera & Vision Integration ==============
+function initCameraPage() {
+    // Setup listeners if not already
+    if (!elements.refreshCameraBtn.dataset.bound) {
+        elements.refreshCameraBtn.addEventListener('click', loadCameraSnapshot);
+        elements.analyzeCameraBtn.addEventListener('click', analyzeCameraSnapshot);
+        elements.refreshCameraBtn.dataset.bound = 'true';
+    }
+    
+    // Load snapshot when opening the page
+    loadCameraSnapshot();
+}
+
+async function loadCameraSnapshot() {
+    elements.cameraFeed.style.display = 'none';
+    elements.cameraLoading.style.display = 'block';
+    elements.refreshCameraBtn.disabled = true;
+    
+    try {
+        const response = await fetch(`${API_BASE}/camera/snapshot`);
+        
+        if (response.ok) {
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+            elements.cameraFeed.src = imageUrl;
+            elements.cameraFeed.style.display = 'block';
+            elements.cameraLoading.style.display = 'none';
+        } else {
+            showToast('Failed to load camera feed. Is the Pi online?', 'error');
+            elements.cameraLoading.innerHTML = '<p style="color:var(--error-color)">Failed to connect to camera</p>';
+        }
+    } catch (error) {
+        showToast('Error connecting to camera endpoint', 'error');
+        elements.cameraLoading.innerHTML = '<p style="color:var(--error-color)">Connection error</p>';
+    } finally {
+        elements.refreshCameraBtn.disabled = false;
+    }
+}
+
+async function analyzeCameraSnapshot() {
+    const prompt = elements.visionPromptInput.value.trim() || 'What do you see in this garden image?';
+    
+    elements.analyzeCameraBtn.disabled = true;
+    elements.analyzeCameraBtn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;"></span> Analyzing...';
+    elements.visionAnalysisResult.classList.add('hidden');
+    
+    try {
+        const response = await fetch(`${API_BASE}/camera/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            elements.visionAnalysisContent.textContent = data.analysis;
+            elements.visionAnalysisResult.classList.remove('hidden');
+            showToast('Analysis complete', 'success');
+        } else {
+            showToast(data.message || 'Analysis failed', 'error');
+            console.error('Vision Error:', data.error);
+        }
+    } catch (error) {
+        showToast('Failed to connect to backend', 'error');
+    } finally {
+        elements.analyzeCameraBtn.disabled = false;
+        elements.analyzeCameraBtn.innerHTML = '<span class="btn-icon">✨</span> Analyze Image';
     }
 }
 

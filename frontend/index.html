@@ -60,6 +60,10 @@
                     <span class="nav-icon">📷</span>
                     <span>Scanner</span>
                 </a>
+                <a href="#" class="nav-item" data-page="camera">
+                    <span class="nav-icon">🎥</span>
+                    <span>Camera</span>
+                </a>
             </nav>
             <div class="llm-status" id="llmStatusContainer" title="Click to open LLM settings">
                 <span class="status-dot" id="llmStatusDot"></span>
@@ -489,6 +493,53 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Camera Page -->
+            <div class="page" id="cameraPage">
+                <div class="page-header">
+                    <h2>🎥 Garden Camera</h2>
+                    <button class="btn btn-primary" id="refreshCameraBtn">📸 Refresh Snapshot</button>
+                </div>
+                
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>Live Camera View</h3>
+                        <div class="camera-container" style="background: #000; border-radius: 8px; overflow: hidden; position: relative; min-height: 300px; display: flex; align-items: center; justify-content: center;">
+                            <img id="cameraFeed" src="" alt="Camera feed will appear here" style="max-width: 100%; height: auto; display: none;">
+                            <div id="cameraLoading" style="color: #fff; text-align: center;">
+                                <span class="loading-spinner"></span>
+                                <p>Loading camera node...</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <h3>🧠 AI Vision Analysis</h3>
+                        <p class="card-subtitle">Ask vLLM to analyze the current snapshot</p>
+                        
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label for="visionPromptInput">What should the AI look for?</label>
+                            <textarea id="visionPromptInput" placeholder="Example: Do you see any pests on the leaves? Are the plants wilting?" style="min-height: 80px;"></textarea>
+                        </div>
+                        
+                        <div class="form-actions">
+                            <button class="btn btn-primary" id="analyzeCameraBtn" style="width: 100%;">
+                                <span class="btn-icon">✨</span> Analyze Image
+                            </button>
+                        </div>
+                        
+                        <div id="visionAnalysisResult" class="extracted-actions hidden" style="margin-top: 20px;">
+                            <div id="visionAnalysisContent" style="white-space: pre-wrap; font-size: 0.9em;"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card" style="margin-top: 20px;">
+                    <h3>📏 Height Calibration (Future)</h3>
+                    <p class="card-subtitle">Place a ruler in the 4x4 space and capture an image to calculate ground pixels vs height.</p>
+                    <button class="btn btn-secondary disabled" disabled>Start Calibration Process</button>
                 </div>
             </div>
         </main>

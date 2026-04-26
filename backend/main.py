@@ -1214,6 +1214,7 @@ def get_llm_settings():
                 "model": "ibm-granite/granite-3.3-8b-instruct",
                 "api_key": "",
                 "endpoint_type": "lmstudio",
+                "camera_node_url": "http://192.168.1.100:5001",
                 "context_length": 8192,
                 "gpu_layers": 35,
                 "cpu_threads": 8
@@ -1226,6 +1227,7 @@ def get_llm_settings():
                 "model": "ibm-granite/granite-3.3-8b-instruct",
                 "api_key": "",
                 "endpoint_type": "lmstudio",
+                "camera_node_url": "http://192.168.1.100:5001",
                 "context_length": 8192,
                 "gpu_layers": 35,
                 "cpu_threads": 8
@@ -1245,6 +1247,7 @@ def save_llm_settings():
             "model": data.get("model", "ibm-granite/granite-3.3-8b-instruct"),
             "api_key": data.get("api_key", ""),
             "endpoint_type": data.get("endpoint_type", "lmstudio"),
+            "camera_node_url": data.get("camera_node_url", "http://192.168.1.100:5001"),
             "context_length": data.get("context_length", 8192),
             "gpu_layers": data.get("gpu_layers", 35),
             "cpu_threads": data.get("cpu_threads", 8)

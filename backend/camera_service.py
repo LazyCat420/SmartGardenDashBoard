@@ -193,7 +193,7 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
 
     if not llm_url:
         # Default to Prism chat completion endpoint
-        llm_url = f"{prism_url}/chat?stream=false"
+        llm_url = os.environ.get("LLM_SERVICE_URL") or f"{prism_url}/chat?stream=false"
     elif "/v1/chat/completions" in llm_url:
         # Auto-convert standard OpenAI endpoint to Prism endpoint if it points to Prism port 7777
         if "7777" in llm_url:
@@ -250,21 +250,16 @@ Plant context: {plant_context}
 
 Important: Return ONLY the JSON object, no markdown, no explanation."""
 
-    # Format payload for Prism /chat
+    # Format payload for Prism /chat (using message-level images array)
     payload = {
         'provider': 'vllm',
         'model': llm_model,
         'messages': [
             {
                 'role': 'user',
-                'content': [
-                    {'type': 'text', 'text': prompt},
-                    {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': f'data:image/jpeg;base64,{image_b64}'
-                        }
-                    }
+                'content': prompt,
+                'images': [
+                    f'data:image/jpeg;base64,{image_b64}'
                 ]
             }
         ],

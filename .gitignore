@@ -75,3 +75,6 @@ htmlcov/
 # Deploy artifacts
 .deploy-logs/
 captures/
+
+# SSH keys for Pi camera (never commit private keys)
+ssh_keys/

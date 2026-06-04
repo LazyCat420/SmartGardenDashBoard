@@ -12,8 +12,8 @@ services:
       - LLM_MODEL_NAME=ibm-granite/granite-3.3-8b-instruct
       - FLASK_PORT=5000
       - FLASK_WORKERS=2
-      - PI_SSH_HOST=10.0.0.50
-      - PI_SSH_USER=pi
+      - PI_SSH_HOST=10.0.0.228
+      - PI_SSH_USER=braindeadpi
       - PI_SSH_PORT=22
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro

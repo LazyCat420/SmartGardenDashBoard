@@ -183,8 +183,44 @@ def get_prism_settings():
     return prism_url, prism_project, prism_username
 
 
+def transform_image(image_data, rotation=0, hflip=False, vflip=False):
+    """Rotate and flip image data using Pillow."""
+    if not (rotation or hflip or vflip):
+        return image_data
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Apply flips
+        if hflip:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        if vflip:
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            
+        # Apply rotation (clockwise)
+        # Note: PIL ROTATE_90 is counter-clockwise, so to rotate clockwise:
+        # 90 clockwise = ROTATE_270
+        # 180 clockwise = ROTATE_180
+        # 270 clockwise = ROTATE_90
+        if rotation == 90:
+            img = img.transpose(Image.ROTATE_270)
+        elif rotation == 180:
+            img = img.transpose(Image.ROTATE_180)
+        elif rotation == 270:
+            img = img.transpose(Image.ROTATE_90)
+            
+        out_buf = io.BytesIO()
+        img.save(out_buf, format='JPEG')
+        return out_buf.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to transform image for LLM: {e}")
+        return image_data
+
+
 def analyze_image(image_path, plant_name=None, plant_variety=None,
-                  last_height=None, llm_url=None, llm_model=None):
+                  last_height=None, llm_url=None, llm_model=None,
+                  rotation=0, hflip=False, vflip=False):
     """Send a captured image to the vision LLM for plant analysis.
 
     Returns dict with analysis results or error.
@@ -219,6 +255,10 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
     # Impose a 10MB size limit for analysis
     if len(image_data) > 10 * 1024 * 1024:
         return {'success': False, 'error': 'Image too large for analysis (>10MB)'}
+
+    # Transform image for LLM if rotation/flip settings are specified
+    if rotation or hflip or vflip:
+        image_data = transform_image(image_data, rotation, hflip, vflip)
 
     image_b64 = base64.b64encode(image_data).decode('utf-8')
 

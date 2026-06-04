@@ -101,7 +101,10 @@ def run_pending_schedules():
             image_path=image_path,
             plant_name=plant_name,
             plant_variety=plant_variety,
-            last_height=last_height
+            last_height=last_height,
+            rotation=endpoint.rotation if endpoint else 0,
+            hflip=endpoint.hflip if endpoint else False,
+            vflip=endpoint.vflip if endpoint else False
         )
 
         if analysis_result['success']:

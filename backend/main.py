@@ -251,6 +251,9 @@ class CameraEndpoint(db.Model):
     capture_command = db.Column(db.String(500),
         default='rpicam-still -o - --width 1920 --height 1080 -t 1000')
     is_active = db.Column(db.Boolean, default=True)
+    rotation = db.Column(db.Integer, default=0)  # 0, 90, 180, 270
+    hflip = db.Column(db.Boolean, default=False)
+    vflip = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -263,6 +266,9 @@ class CameraEndpoint(db.Model):
             'ssh_host': self.ssh_host, 'ssh_user': self.ssh_user,
             'ssh_port': self.ssh_port, 'capture_command': self.capture_command,
             'is_active': self.is_active,
+            'rotation': self.rotation,
+            'hflip': self.hflip,
+            'vflip': self.vflip,
             'last_seen': self.last_seen.isoformat() if self.last_seen else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'capture_count': len(self.captures)
@@ -1517,11 +1523,42 @@ def create_camera_endpoint():
         ssh_user=data.get('ssh_user', 'pi')[:100],
         ssh_port=int(data.get('ssh_port', 22)),
         capture_command=data.get('capture_command',
-            'rpicam-still -o - --width 1920 --height 1080 -t 1000')[:500]
+            'rpicam-still -o - --width 1920 --height 1080 -t 1000')[:500],
+        rotation=int(data.get('rotation', 0)),
+        hflip=bool(data.get('hflip', False)),
+        vflip=bool(data.get('vflip', False))
     )
     db.session.add(endpoint)
     db.session.commit()
     return jsonify(endpoint.to_dict()), 201
+
+
+@app.route('/api/camera/endpoints/<int:endpoint_id>', methods=['PUT'])
+def update_camera_endpoint(endpoint_id):
+    endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    if 'name' in data:
+        endpoint.name = data['name'][:100]
+    if 'ssh_host' in data:
+        endpoint.ssh_host = data['ssh_host'].strip()[:200]
+    if 'ssh_user' in data:
+        endpoint.ssh_user = data['ssh_user'][:100]
+    if 'ssh_port' in data:
+        endpoint.ssh_port = int(data['ssh_port'])
+    if 'capture_command' in data:
+        endpoint.capture_command = data['capture_command'][:500]
+    if 'rotation' in data:
+        endpoint.rotation = int(data['rotation'])
+    if 'hflip' in data:
+        endpoint.hflip = bool(data['hflip'])
+    if 'vflip' in data:
+        endpoint.vflip = bool(data['vflip'])
+
+    db.session.commit()
+    return jsonify(endpoint.to_dict())
 
 
 @app.route('/api/camera/endpoints/<int:endpoint_id>', methods=['DELETE'])
@@ -1624,6 +1661,27 @@ def get_capture_image(capture_id):
     if not os.path.exists(resolved):
         return jsonify({'error': 'Image not found'}), 404
 
+    # Apply orientation transformation on-the-fly if configured
+    endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+    rotation = endpoint.rotation if endpoint else 0
+    hflip = endpoint.hflip if endpoint else False
+    vflip = endpoint.vflip if endpoint else False
+
+    if rotation or hflip or vflip:
+        try:
+            from backend.camera_service import transform_image as cam_transform_image
+            with open(resolved, 'rb') as f:
+                raw_data = f.read()
+            transformed_data = cam_transform_image(raw_data, rotation, hflip, vflip)
+            import io
+            return send_file(
+                io.BytesIO(transformed_data),
+                mimetype='image/jpeg',
+                download_name=safe_filename
+            )
+        except Exception as e:
+            app.logger.warning(f"Failed to transform served image: {e}")
+
     return send_file(
         resolved,
         mimetype='image/jpeg',
@@ -1658,11 +1716,19 @@ def analyze_capture(capture_id):
     capture.analysis_status = 'analyzing'
     db.session.commit()
 
+    endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+    rotation = endpoint.rotation if endpoint else 0
+    hflip = endpoint.hflip if endpoint else False
+    vflip = endpoint.vflip if endpoint else False
+
     result = cam_analyze_image(
         image_path=image_path,
         plant_name=plant_name,
         plant_variety=plant_variety,
-        last_height=last_height
+        last_height=last_height,
+        rotation=rotation,
+        hflip=hflip,
+        vflip=vflip
     )
 
     if result['success']:

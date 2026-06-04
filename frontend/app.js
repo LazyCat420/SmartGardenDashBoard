@@ -4714,6 +4714,65 @@ function renderCameraEndpoints() {
         info.appendChild(hostLine);
         info.appendChild(captureLine);
 
+        // Orientation quick-controls
+        const orientationDiv = document.createElement('div');
+        orientationDiv.className = 'orientation-controls';
+        orientationDiv.style.marginTop = '12px';
+        orientationDiv.style.marginBottom = '12px';
+        orientationDiv.style.display = 'flex';
+        orientationDiv.style.alignItems = 'center';
+        orientationDiv.style.gap = '8px';
+        orientationDiv.style.flexWrap = 'wrap';
+
+        const rotLabel = document.createElement('span');
+        rotLabel.textContent = '🔄 Rotate:';
+        rotLabel.style.fontSize = '12px';
+        rotLabel.style.color = 'var(--text-secondary)';
+
+        const rotateSelect = document.createElement('select');
+        rotateSelect.style.padding = '4px 8px';
+        rotateSelect.style.fontSize = '12px';
+        rotateSelect.style.background = 'var(--bg-input)';
+        rotateSelect.style.border = '1px solid var(--border)';
+        rotateSelect.style.borderRadius = '4px';
+        rotateSelect.style.color = 'var(--text-primary)';
+        
+        [0, 90, 180, 270].forEach(deg => {
+            const opt = document.createElement('option');
+            opt.value = deg;
+            opt.textContent = `${deg}°`;
+            if (ep.rotation === deg) opt.selected = true;
+            rotateSelect.appendChild(opt);
+        });
+        
+        rotateSelect.addEventListener('change', async (e) => {
+            const rot = parseInt(e.target.value);
+            await updateCameraOrientation(ep.id, { rotation: rot });
+        });
+
+        const hflipBtn = document.createElement('button');
+        hflipBtn.className = 'btn btn-sm ' + (ep.hflip ? 'btn-primary' : 'btn-secondary');
+        hflipBtn.style.padding = '4px 8px';
+        hflipBtn.style.fontSize = '12px';
+        hflipBtn.textContent = '↔️ H-Flip';
+        hflipBtn.addEventListener('click', async () => {
+            await updateCameraOrientation(ep.id, { hflip: !ep.hflip });
+        });
+
+        const vflipBtn = document.createElement('button');
+        vflipBtn.className = 'btn btn-sm ' + (ep.vflip ? 'btn-primary' : 'btn-secondary');
+        vflipBtn.style.padding = '4px 8px';
+        vflipBtn.style.fontSize = '12px';
+        vflipBtn.textContent = '↕️ V-Flip';
+        vflipBtn.addEventListener('click', async () => {
+            await updateCameraOrientation(ep.id, { vflip: !ep.vflip });
+        });
+
+        orientationDiv.appendChild(rotLabel);
+        orientationDiv.appendChild(rotateSelect);
+        orientationDiv.appendChild(hflipBtn);
+        orientationDiv.appendChild(vflipBtn);
+
         const actions = document.createElement('div');
         actions.className = 'endpoint-actions';
 
@@ -4732,6 +4791,7 @@ function renderCameraEndpoints() {
 
         card.appendChild(header);
         card.appendChild(info);
+        card.appendChild(orientationDiv);
         card.appendChild(actions);
         container.appendChild(card);
     });
@@ -4808,6 +4868,25 @@ function showAddCameraEndpointModal() {
             <input type="text" id="camCommand" value="rpicam-still -o - --width 1920 --height 1080 -t 1000">
             <small class="form-hint">Must output image data to stdout (-o -)</small>
         </div>
+        <div class="form-row" style="margin-bottom: 16px;">
+            <div class="form-group">
+                <label for="camRotation">Initial Rotation</label>
+                <select id="camRotation" style="width: 100%; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 14px;">
+                    <option value="0">0°</option>
+                    <option value="90">90°</option>
+                    <option value="180">180°</option>
+                    <option value="270">270°</option>
+                </select>
+            </div>
+            <div class="form-group" style="display: flex; gap: 16px; align-items: center; margin-top: 24px; padding-left: 8px;">
+                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; font-size: 13px; color: var(--text-secondary);">
+                    <input type="checkbox" id="camHFlip" style="width: 16px; height: 16px; accent-color: var(--primary);"> H-Flip
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; font-size: 13px; color: var(--text-secondary);">
+                    <input type="checkbox" id="camVFlip" style="width: 16px; height: 16px; accent-color: var(--primary);"> V-Flip
+                </label>
+            </div>
+        </div>
         <div class="form-actions">
             <button class="btn btn-primary" onclick="saveCameraEndpoint()">\ud83d\udcbe Save Camera</button>
         </div>
@@ -4820,6 +4899,9 @@ async function saveCameraEndpoint() {
     const user = document.getElementById('camUser').value.trim() || 'pi';
     const port = parseInt(document.getElementById('camPort').value) || 22;
     const command = document.getElementById('camCommand').value.trim();
+    const rotation = parseInt(document.getElementById('camRotation').value) || 0;
+    const hflip = document.getElementById('camHFlip').checked;
+    const vflip = document.getElementById('camVFlip').checked;
 
     if (!name || !host) {
         showToast('Name and SSH host are required', 'error');
@@ -4832,7 +4914,8 @@ async function saveCameraEndpoint() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 name, ssh_host: host, ssh_user: user,
-                ssh_port: port, capture_command: command
+                ssh_port: port, capture_command: command,
+                rotation, hflip, vflip
             })
         });
 
@@ -4847,6 +4930,26 @@ async function saveCameraEndpoint() {
         }
     } catch (error) {
         showToast('Failed to add camera endpoint', 'error');
+    }
+}
+
+async function updateCameraOrientation(endpointId, updates) {
+    try {
+        const response = await fetch(`${API_BASE}/camera/endpoints/${endpointId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+        });
+        if (response.ok) {
+            showToast('Camera orientation updated!', 'success');
+            await loadCameraEndpoints();
+            renderCaptureGallery();
+        } else {
+            const data = await response.json();
+            showToast(data.error || 'Failed to update camera', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to update camera orientation', 'error');
     }
 }
 
@@ -4957,7 +5060,9 @@ function renderCaptureGallery() {
         imgContainer.className = 'capture-image-container';
 
         const img = document.createElement('img');
-        img.src = `${API_BASE}/camera/captures/${capture.id}/image`;
+        const ep = cameraEndpoints.find(e => e.id === capture.endpoint_id);
+        const queryParams = ep ? `?r=${ep.rotation}&h=${ep.hflip ? 1 : 0}&v=${ep.vflip ? 1 : 0}` : '';
+        img.src = `${API_BASE}/camera/captures/${capture.id}/image${queryParams}`;
         img.alt = 'Plant capture';
         img.loading = 'lazy';
         imgContainer.appendChild(img);
@@ -5083,9 +5188,12 @@ function viewCaptureDetails(capture) {
         recsHtml = '<ul>' + a.recommendations.map(r => `<li>${r}</li>`).join('') + '</ul>';
     }
 
+    const ep = cameraEndpoints.find(e => e.id === capture.endpoint_id);
+    const queryParams = ep ? `?r=${ep.rotation}&h=${ep.hflip ? 1 : 0}&v=${ep.vflip ? 1 : 0}` : '';
+
     showModal('\ud83e\udde0 Analysis Results', `
         <div class="analysis-detail">
-            <img src="${API_BASE}/camera/captures/${capture.id}/image" alt="Capture" class="analysis-preview-img">
+            <img src="${API_BASE}/camera/captures/${capture.id}/image${queryParams}" alt="Capture" class="analysis-preview-img">
             <div class="analysis-grid">
                 <div class="analysis-item">
                     <span class="label">Species</span>

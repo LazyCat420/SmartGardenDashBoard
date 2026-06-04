@@ -11,7 +11,7 @@ services:
       - LLM_SERVICE_URL=http://10.0.0.16:7777/v1/chat/completions
       - LLM_MODEL_NAME=ibm-granite/granite-3.3-8b-instruct
       - FLASK_PORT=5000
-      - FLASK_WORKERS=2
+      - FLASK_WORKERS=1
       - PI_SSH_HOST=10.0.0.228
       - PI_SSH_USER=braindeadpi
       - PI_SSH_PORT=22

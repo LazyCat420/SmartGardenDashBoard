@@ -1763,7 +1763,14 @@ def init_db():
         db.create_all()
         print("Database initialized!")
 
+# Start background scheduler
+try:
+    from backend.scheduler import start_scheduler
+    start_scheduler()
+except Exception as e:
+    print(f"Failed to start background scheduler: {e}")
 
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, port=5000)
+

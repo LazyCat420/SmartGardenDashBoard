@@ -28,8 +28,9 @@ EXTRA_SSH_SYNC() {
   info "Creating data directories on remote host..."
   ssh "$DEPLOY_SSH_HOST" "mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys' 2>/dev/null || sudo mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys'"
   
-  info "Copying SSH keys to remote host..."
-  scp -p "${SCRIPT_DIR}/ssh_keys/id_ed25519" "${SCRIPT_DIR}/ssh_keys/id_ed25519.pub" "${DEPLOY_SSH_HOST}:${DEPLOY_COMPOSE_DIR}/ssh_keys/"
+  info "Copying SSH keys to remote host via pipe..."
+  cat "${SCRIPT_DIR}/ssh_keys/id_ed25519" | ssh "$DEPLOY_SSH_HOST" "sudo tee '${DEPLOY_COMPOSE_DIR}/ssh_keys/id_ed25519' >/dev/null"
+  cat "${SCRIPT_DIR}/ssh_keys/id_ed25519.pub" | ssh "$DEPLOY_SSH_HOST" "sudo tee '${DEPLOY_COMPOSE_DIR}/ssh_keys/id_ed25519.pub' >/dev/null"
   
   info "Setting correct permissions on remote host..."
   ssh "$DEPLOY_SSH_HOST" "sudo chown -R 1001:1001 '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys' && sudo chmod 700 '${DEPLOY_COMPOSE_DIR}/ssh_keys' && sudo chmod 600 '${DEPLOY_COMPOSE_DIR}/ssh_keys/id_ed25519'"

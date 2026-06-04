@@ -263,8 +263,9 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
                 ]
             }
         ],
-        'maxTokens': 1024,
+        'maxTokens': 2048,
         'temperature': 0.1,
+        'thinkingEnabled': False,
         'conversationId': str(uuid.uuid4()),
         'project': prism_project,
         'username': prism_username

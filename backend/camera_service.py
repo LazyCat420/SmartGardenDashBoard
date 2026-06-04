@@ -139,21 +139,70 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
         return {'success': False, 'message': str(e)}
 
 
+def load_projects_json():
+    """Dynamically load projects.json config, searching direct paths and parent directories."""
+    # 1. Check direct path /app/projects.json (mounted in container)
+    p_direct = "/app/projects.json"
+    if os.path.isfile(p_direct):
+        try:
+            with open(p_direct, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    # 2. Walk up parent directories (like trading-service)
+    from pathlib import Path
+    curr = Path(__file__).resolve()
+    for parent in curr.parents:
+        p1 = parent / "vault-service" / "projects.json"
+        if p1.is_file():
+            try:
+                with open(p1, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        p2 = parent / "projects.json"
+        if p2.is_file():
+            try:
+                with open(p2, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return {}
+
+def get_prism_settings():
+    """Retrieve Prism URL, project, and username from projects.json or environment."""
+    projects_data = load_projects_json()
+    config = projects_data.get("config", {})
+    default_host = projects_data.get("defaultHost", "10.0.0.16")
+    
+    prism_url = os.environ.get("PRISM_URL") or config.get("PRISM_URL") or f"http://{default_host}:7777"
+    prism_project = os.environ.get("PRISM_PROJECT") or config.get("PRISM_PROJECT") or "vllm-trading-bot"
+    prism_username = os.environ.get("PRISM_USERNAME") or config.get("PRISM_USERNAME") or "lazy-trader"
+    
+    return prism_url, prism_project, prism_username
+
+
 def analyze_image(image_path, plant_name=None, plant_variety=None,
                   last_height=None, llm_url=None, llm_model=None):
     """Send a captured image to the vision LLM for plant analysis.
 
     Returns dict with analysis results or error.
     """
+    prism_url, prism_project, prism_username = get_prism_settings()
+
     if not llm_url:
-        llm_url = os.environ.get(
-            'LLM_SERVICE_URL',
-            'http://localhost:1234/v1/chat/completions'
-        )
+        # Default to Prism chat completion endpoint
+        llm_url = f"{prism_url}/chat?stream=false"
+    elif "/v1/chat/completions" in llm_url:
+        # Auto-convert standard OpenAI endpoint to Prism endpoint if it points to Prism port 7777
+        if "7777" in llm_url:
+            llm_url = llm_url.replace("/v1/chat/completions", "/chat?stream=false")
+
     if not llm_model:
         llm_model = os.environ.get(
             'LLM_MODEL_NAME',
-            'ibm-granite/granite-3.3-8b-instruct'
+            'Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16'
         )
 
     # Read and base64-encode the image
@@ -201,7 +250,9 @@ Plant context: {plant_context}
 
 Important: Return ONLY the JSON object, no markdown, no explanation."""
 
+    # Format payload for Prism /chat
     payload = {
+        'provider': 'vllm',
         'model': llm_model,
         'messages': [
             {
@@ -217,8 +268,18 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
                 ]
             }
         ],
-        'max_tokens': 1024,
-        'temperature': 0.1
+        'maxTokens': 1024,
+        'temperature': 0.1,
+        'conversationId': str(uuid.uuid4()),
+        'project': prism_project,
+        'username': prism_username
+    }
+
+    # Set headers for Prism
+    headers = {
+        'Content-Type': 'application/json',
+        'x-project': prism_project,
+        'x-username': prism_username
     }
 
     # Load API key if available
@@ -234,11 +295,11 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
     except Exception:
         pass
 
-    headers = {'Content-Type': 'application/json'}
     if api_key:
         headers['Authorization'] = f'Bearer {api_key}'
 
     try:
+        logger.info(f"Sending image analysis request to {llm_url} for model {llm_model}...")
         response = http_requests.post(
             llm_url,
             headers=headers,
@@ -248,8 +309,15 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
         response.raise_for_status()
         data = response.json()
 
-        # Extract the response text
-        content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+        # Extract the response text from Prism format
+        response_data = data.get('response')
+        if isinstance(response_data, dict):
+            data = response_data
+        
+        content = data.get('text') or data.get('content') or ''
+        if not content and 'choices' in data:
+            # Fallback to OpenAI format if we called a direct endpoint
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
 
         # Try to parse JSON from the response
         # Strip markdown code fences if present
@@ -271,8 +339,9 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
             'raw_response': content[:500]
         }
     except http_requests.exceptions.Timeout:
-        return {'success': False, 'error': 'Vision analysis timed out (120s)'}
+        return {'success': False, 'error': f'Vision analysis timed out (120s) at {llm_url}'}
     except http_requests.exceptions.ConnectionError:
-        return {'success': False, 'error': 'Cannot connect to LLM service'}
+        return {'success': False, 'error': f'Cannot connect to LLM service at {llm_url}'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
+

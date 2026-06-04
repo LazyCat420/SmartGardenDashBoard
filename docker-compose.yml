@@ -8,8 +8,8 @@ services:
     environment:
       - TZ=America/Los_Angeles
       - DATABASE_URL=postgresql://smartgarden:smartgarden_pass@10.0.0.16:5433/smartgarden
-      - LLM_SERVICE_URL=http://10.0.0.16:7777/v1/chat/completions
-      - LLM_MODEL_NAME=ibm-granite/granite-3.3-8b-instruct
+      - LLM_SERVICE_URL=http://10.0.0.16:7777/chat?stream=false
+      - LLM_MODEL_NAME=Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16
       - FLASK_PORT=5000
       - FLASK_WORKERS=1
       - PI_SSH_HOST=10.0.0.228
@@ -21,6 +21,7 @@ services:
       - ./data:/app/data
       - ./captures:/app/captures
       - ./ssh_keys:/home/appusr/.ssh:ro
+      - /volume1/docker/vault-service/projects.json:/app/projects.json:ro
     ports:
       - "5050:5000"
     logging:

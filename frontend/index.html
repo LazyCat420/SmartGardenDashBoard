@@ -60,6 +60,10 @@
                     <span class="nav-icon">📷</span>
                     <span>Scanner</span>
                 </a>
+                <a href="#" class="nav-item" data-page="camera">
+                    <span class="nav-icon">📸</span>
+                    <span>Camera</span>
+                </a>
             </nav>
             <div class="llm-status" id="llmStatusContainer" title="Click to open LLM settings">
                 <span class="status-dot" id="llmStatusDot"></span>
@@ -489,6 +493,80 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Camera Page -->
+            <div class="page" id="cameraPage">
+                <div class="page-header">
+                    <h2>📸 Camera System</h2>
+                    <button class="btn btn-primary" id="addCameraEndpointBtn">+ Add Camera</button>
+                </div>
+
+                <!-- Camera Endpoints -->
+                <div class="camera-endpoints-section">
+                    <h3 class="section-title">Camera Endpoints</h3>
+                    <div id="cameraEndpointsList" class="camera-endpoints-grid"></div>
+                </div>
+
+                <!-- Capture Controls -->
+                <div class="camera-capture-section">
+                    <h3 class="section-title">Capture</h3>
+                    <div class="capture-controls card">
+                        <div class="capture-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="captureEndpointSelect">Camera Endpoint</label>
+                                    <select id="captureEndpointSelect" title="Select camera to capture from"></select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="capturePlantSelect">Link to Plant (optional)</label>
+                                    <select id="capturePlantSelect" title="Link capture to a plant">
+                                        <option value="">-- No plant --</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" id="captureNowBtn">📸 Capture Now</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Capture Gallery -->
+                <div class="camera-gallery-section">
+                    <h3 class="section-title">Capture Gallery</h3>
+                    <div id="captureGallery" class="capture-gallery"></div>
+                </div>
+
+                <!-- Schedules -->
+                <div class="camera-schedule-section">
+                    <h3 class="section-title">Scheduled Captures</h3>
+                    <div class="schedule-controls card">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="scheduleEndpointSelect">Camera</label>
+                                <select id="scheduleEndpointSelect" title="Select camera for schedule"></select>
+                            </div>
+                            <div class="form-group">
+                                <label for="schedulePlantSelect">Plant (optional)</label>
+                                <select id="schedulePlantSelect" title="Link schedule to a plant">
+                                    <option value="">-- No plant --</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="scheduleInterval">Interval</label>
+                                <select id="scheduleInterval" title="Capture interval">
+                                    <option value="30">Every 30 min</option>
+                                    <option value="60">Every 1 hour</option>
+                                    <option value="120">Every 2 hours</option>
+                                    <option value="360" selected>Every 6 hours</option>
+                                    <option value="720">Every 12 hours</option>
+                                    <option value="1440">Every 24 hours</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary" id="addScheduleBtn">+ Add Schedule</button>
+                    </div>
+                    <div id="schedulesList" class="schedules-list"></div>
                 </div>
             </div>
         </main>

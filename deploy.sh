@@ -26,8 +26,8 @@ PRE_BUILD() {
 
 EXTRA_SSH_SYNC() {
   info "Creating data directories on remote host..."
-  ssh "$DEPLOY_SSH_HOST" "mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' 2>/dev/null || sudo mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures'"
-  ssh "$DEPLOY_SSH_HOST" "sudo chown -R 1001:1001 '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures'"
+  ssh "$DEPLOY_SSH_HOST" "mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys' 2>/dev/null || sudo mkdir -p '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys'"
+  ssh "$DEPLOY_SSH_HOST" "sudo chown -R 1001:1001 '${DEPLOY_COMPOSE_DIR}/logs' '${DEPLOY_COMPOSE_DIR}/data' '${DEPLOY_COMPOSE_DIR}/captures' '${DEPLOY_COMPOSE_DIR}/ssh_keys' && sudo chmod 700 '${DEPLOY_COMPOSE_DIR}/ssh_keys'"
   ok "Remote directories ready"
 }
 

@@ -349,7 +349,8 @@ function navigateTo(page) {
         notes: 'Garden Notes',
         weather: 'Weather Log',
         scanner: 'Plant Scanner',
-        leaderboard: 'Leaderboard'
+        leaderboard: 'Leaderboard',
+        camera: 'Camera System'
     };
     elements.pageTitle.textContent = titles[page] || page;
 
@@ -388,6 +389,9 @@ async function loadPageData(page) {
             break;
         case 'leaderboard':
             await loadLeaderboard();
+            break;
+        case 'camera':
+            await loadCameraPage();
             break;
     }
 }
@@ -4616,4 +4620,630 @@ function resetScannerCreateForm() {
     }
 
     capturedPhotoData = null;
+}
+
+
+// ============== Camera System ==============
+let cameraEndpoints = [];
+let cameraCaptures = [];
+let cameraSchedules = [];
+
+async function loadCameraPage() {
+    await Promise.all([
+        loadCameraEndpoints(),
+        loadCameraCaptures(),
+        loadCameraSchedules()
+    ]);
+    populateCameraSelects();
+    setupCameraButtons();
+}
+
+let cameraButtonsSetup = false;
+function setupCameraButtons() {
+    if (cameraButtonsSetup) return;
+    cameraButtonsSetup = true;
+
+    const addBtn = document.getElementById('addCameraEndpointBtn');
+    if (addBtn) addBtn.addEventListener('click', showAddCameraEndpointModal);
+
+    const captureBtn = document.getElementById('captureNowBtn');
+    if (captureBtn) captureBtn.addEventListener('click', captureNow);
+
+    const scheduleBtn = document.getElementById('addScheduleBtn');
+    if (scheduleBtn) scheduleBtn.addEventListener('click', addCaptureSchedule);
+}
+
+async function loadCameraEndpoints() {
+    try {
+        const response = await fetch(`${API_BASE}/camera/endpoints`);
+        cameraEndpoints = await response.json();
+        renderCameraEndpoints();
+    } catch (error) {
+        console.debug('Failed to load camera endpoints:', error);
+    }
+}
+
+function renderCameraEndpoints() {
+    const container = document.getElementById('cameraEndpointsList');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (cameraEndpoints.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        const icon = document.createElement('span');
+        icon.textContent = '\ud83d\udcf8';
+        icon.style.fontSize = '3rem';
+        const msg = document.createElement('p');
+        msg.textContent = 'No camera endpoints configured. Add a Raspberry Pi camera to get started.';
+        empty.appendChild(icon);
+        empty.appendChild(msg);
+        container.appendChild(empty);
+        return;
+    }
+
+    cameraEndpoints.forEach(ep => {
+        const card = document.createElement('div');
+        card.className = 'camera-endpoint-card card';
+
+        const header = document.createElement('div');
+        header.className = 'endpoint-header';
+
+        const title = document.createElement('h4');
+        title.textContent = ep.name;
+
+        const statusDot = document.createElement('span');
+        statusDot.className = 'status-dot ' + (ep.is_active ? 'connected' : 'disconnected');
+
+        header.appendChild(title);
+        header.appendChild(statusDot);
+
+        const info = document.createElement('div');
+        info.className = 'endpoint-info';
+
+        const hostLine = document.createElement('p');
+        hostLine.textContent = `${ep.ssh_user}@${ep.ssh_host}:${ep.ssh_port}`;
+
+        const captureLine = document.createElement('p');
+        captureLine.className = 'text-muted';
+        captureLine.textContent = `${ep.capture_count} captures`;
+        if (ep.last_seen) {
+            captureLine.textContent += ` \u00b7 Last seen: ${new Date(ep.last_seen).toLocaleString()}`;
+        }
+
+        info.appendChild(hostLine);
+        info.appendChild(captureLine);
+
+        const actions = document.createElement('div');
+        actions.className = 'endpoint-actions';
+
+        const testBtn = document.createElement('button');
+        testBtn.className = 'btn btn-sm btn-secondary';
+        testBtn.textContent = '\ud83d\udd0c Test';
+        testBtn.addEventListener('click', () => testCameraEndpoint(ep.id));
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-sm btn-danger';
+        deleteBtn.textContent = '\ud83d\uddd1\ufe0f Delete';
+        deleteBtn.addEventListener('click', () => deleteCameraEndpoint(ep.id));
+
+        actions.appendChild(testBtn);
+        actions.appendChild(deleteBtn);
+
+        card.appendChild(header);
+        card.appendChild(info);
+        card.appendChild(actions);
+        container.appendChild(card);
+    });
+}
+
+function populateCameraSelects() {
+    const selects = [
+        document.getElementById('captureEndpointSelect'),
+        document.getElementById('scheduleEndpointSelect')
+    ];
+
+    selects.forEach(sel => {
+        if (!sel) return;
+        sel.replaceChildren();
+        if (cameraEndpoints.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = '-- No cameras configured --';
+            sel.appendChild(opt);
+        } else {
+            cameraEndpoints.forEach(ep => {
+                const opt = document.createElement('option');
+                opt.value = ep.id;
+                opt.textContent = ep.name;
+                sel.appendChild(opt);
+            });
+        }
+    });
+
+    // Populate plant selects
+    const plantSelects = [
+        document.getElementById('capturePlantSelect'),
+        document.getElementById('schedulePlantSelect')
+    ];
+
+    plantSelects.forEach(sel => {
+        if (!sel) return;
+        sel.replaceChildren();
+        const noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = '-- No plant --';
+        sel.appendChild(noneOpt);
+        plants.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.display_name || p.name;
+            sel.appendChild(opt);
+        });
+    });
+}
+
+function showAddCameraEndpointModal() {
+    showModal('\ud83d\udcf8 Add Camera Endpoint', `
+        <div class="form-group">
+            <label for="camName">Camera Name *</label>
+            <input type="text" id="camName" placeholder="e.g., Garden Pi Camera 1">
+        </div>
+        <div class="form-group">
+            <label for="camHost">SSH Host (IP Address) *</label>
+            <input type="text" id="camHost" placeholder="e.g., 10.0.0.50">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="camUser">SSH User</label>
+                <input type="text" id="camUser" value="pi">
+            </div>
+            <div class="form-group">
+                <label for="camPort">SSH Port</label>
+                <input type="number" id="camPort" value="22">
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="camCommand">Capture Command</label>
+            <input type="text" id="camCommand" value="rpicam-still -o - --width 1920 --height 1080 -t 1000">
+            <small class="form-hint">Must output image data to stdout (-o -)</small>
+        </div>
+        <div class="form-actions">
+            <button class="btn btn-primary" onclick="saveCameraEndpoint()">\ud83d\udcbe Save Camera</button>
+        </div>
+    `);
+}
+
+async function saveCameraEndpoint() {
+    const name = document.getElementById('camName').value.trim();
+    const host = document.getElementById('camHost').value.trim();
+    const user = document.getElementById('camUser').value.trim() || 'pi';
+    const port = parseInt(document.getElementById('camPort').value) || 22;
+    const command = document.getElementById('camCommand').value.trim();
+
+    if (!name || !host) {
+        showToast('Name and SSH host are required', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/camera/endpoints`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name, ssh_host: host, ssh_user: user,
+                ssh_port: port, capture_command: command
+            })
+        });
+
+        if (response.ok) {
+            showToast('Camera endpoint added!', 'success');
+            closeModal();
+            await loadCameraEndpoints();
+            populateCameraSelects();
+        } else {
+            const data = await response.json();
+            showToast(data.error || 'Failed to add endpoint', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to add camera endpoint', 'error');
+    }
+}
+
+async function testCameraEndpoint(endpointId) {
+    showToast('Testing connection...', 'info');
+    try {
+        const response = await fetch(`${API_BASE}/camera/endpoints/${endpointId}/test`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        if (data.reachable) {
+            showToast('\u2705 Connection successful!', 'success');
+            await loadCameraEndpoints();
+        } else {
+            showToast(`\u274c ${data.message}`, 'error');
+        }
+    } catch (error) {
+        showToast('Test failed', 'error');
+    }
+}
+
+async function deleteCameraEndpoint(endpointId) {
+    if (!confirm('Delete this camera endpoint?')) return;
+    try {
+        await fetch(`${API_BASE}/camera/endpoints/${endpointId}`, { method: 'DELETE' });
+        showToast('Endpoint deleted', 'success');
+        await loadCameraEndpoints();
+        populateCameraSelects();
+    } catch (error) {
+        showToast('Failed to delete endpoint', 'error');
+    }
+}
+
+async function captureNow() {
+    const endpointSelect = document.getElementById('captureEndpointSelect');
+    const plantSelect = document.getElementById('capturePlantSelect');
+    const captureBtn = document.getElementById('captureNowBtn');
+
+    const endpointId = endpointSelect?.value;
+    if (!endpointId) {
+        showToast('Select a camera endpoint first', 'error');
+        return;
+    }
+
+    captureBtn.disabled = true;
+    captureBtn.textContent = '\u23f3 Capturing...';
+
+    try {
+        const body = {};
+        if (plantSelect?.value) body.plant_id = plantSelect.value;
+
+        const response = await fetch(`${API_BASE}/camera/capture/${endpointId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            showToast('\ud83d\udcf8 Image captured!', 'success');
+            await loadCameraCaptures();
+        } else {
+            showToast(`Capture failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        showToast('Capture failed', 'error');
+    } finally {
+        captureBtn.disabled = false;
+        captureBtn.textContent = '\ud83d\udcf8 Capture Now';
+    }
+}
+
+async function loadCameraCaptures() {
+    try {
+        const response = await fetch(`${API_BASE}/camera/captures?per_page=50`);
+        const data = await response.json();
+        cameraCaptures = data.captures || [];
+        renderCaptureGallery();
+    } catch (error) {
+        console.debug('Failed to load captures:', error);
+    }
+}
+
+function renderCaptureGallery() {
+    const container = document.getElementById('captureGallery');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (cameraCaptures.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        const icon = document.createElement('span');
+        icon.textContent = '\ud83d\uddbc\ufe0f';
+        icon.style.fontSize = '3rem';
+        const msg = document.createElement('p');
+        msg.textContent = 'No captures yet. Use the capture controls above to take your first photo.';
+        empty.appendChild(icon);
+        empty.appendChild(msg);
+        container.appendChild(empty);
+        return;
+    }
+
+    cameraCaptures.forEach(capture => {
+        const card = document.createElement('div');
+        card.className = 'capture-card';
+
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'capture-image-container';
+
+        const img = document.createElement('img');
+        img.src = `${API_BASE}/camera/captures/${capture.id}/image`;
+        img.alt = 'Plant capture';
+        img.loading = 'lazy';
+        imgContainer.appendChild(img);
+
+        // Analysis status badge
+        const badge = document.createElement('span');
+        badge.className = `capture-badge ${capture.analysis_status}`;
+        badge.textContent = capture.analysis_status;
+        imgContainer.appendChild(badge);
+
+        card.appendChild(imgContainer);
+
+        const info = document.createElement('div');
+        info.className = 'capture-info';
+
+        const dateLine = document.createElement('p');
+        dateLine.className = 'capture-date';
+        dateLine.textContent = new Date(capture.captured_at).toLocaleString();
+        info.appendChild(dateLine);
+
+        if (capture.plant_name) {
+            const plantLine = document.createElement('p');
+            plantLine.className = 'capture-plant';
+            plantLine.textContent = '\ud83c\udf3f ' + capture.plant_name;
+            info.appendChild(plantLine);
+        }
+
+        // Show analysis results if available
+        if (capture.analysis_result) {
+            const analysis = capture.analysis_result;
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'capture-analysis';
+
+            if (analysis.health_rating) {
+                const health = document.createElement('span');
+                health.className = 'analysis-badge health';
+                health.textContent = `Health: ${analysis.health_rating}/10`;
+                resultDiv.appendChild(health);
+            }
+
+            if (analysis.plant_species) {
+                const species = document.createElement('span');
+                species.className = 'analysis-badge species';
+                species.textContent = analysis.plant_species;
+                resultDiv.appendChild(species);
+            }
+
+            if (analysis.growth_stage) {
+                const stage = document.createElement('span');
+                stage.className = 'analysis-badge stage';
+                stage.textContent = analysis.growth_stage;
+                resultDiv.appendChild(stage);
+            }
+
+            if (analysis.pests_detected && analysis.pests_detected.length > 0) {
+                const pests = document.createElement('span');
+                pests.className = 'analysis-badge pests';
+                pests.textContent = `\u26a0\ufe0f ${analysis.pests_detected.length} pest(s)`;
+                resultDiv.appendChild(pests);
+            }
+
+            info.appendChild(resultDiv);
+        }
+
+        card.appendChild(info);
+
+        // Actions
+        const actions = document.createElement('div');
+        actions.className = 'capture-actions';
+
+        if (capture.analysis_status === 'pending' || capture.analysis_status === 'failed') {
+            const analyzeBtn = document.createElement('button');
+            analyzeBtn.className = 'btn btn-sm btn-primary';
+            analyzeBtn.textContent = '\ud83e\udde0 Analyze';
+            analyzeBtn.addEventListener('click', () => analyzeCapture(capture.id));
+            actions.appendChild(analyzeBtn);
+        }
+
+        if (capture.analysis_result) {
+            const viewBtn = document.createElement('button');
+            viewBtn.className = 'btn btn-sm btn-secondary';
+            viewBtn.textContent = '\ud83d\udd0d Details';
+            viewBtn.addEventListener('click', () => viewCaptureDetails(capture));
+            actions.appendChild(viewBtn);
+        }
+
+        card.appendChild(actions);
+        container.appendChild(card);
+    });
+}
+
+async function analyzeCapture(captureId) {
+    showToast('\ud83e\udde0 Analyzing image with AI...', 'info');
+    try {
+        const response = await fetch(`${API_BASE}/camera/captures/${captureId}/analyze`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('\u2705 Analysis complete!', 'success');
+            await loadCameraCaptures();
+        } else {
+            showToast(`Analysis failed: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        showToast('Analysis request failed', 'error');
+    }
+}
+
+function viewCaptureDetails(capture) {
+    const a = capture.analysis_result;
+    if (!a) return;
+
+    let pestsHtml = 'None detected';
+    if (a.pests_detected && a.pests_detected.length > 0) {
+        pestsHtml = a.pests_detected.map(p =>
+            `<span class="analysis-badge pests">${p.type} (${p.severity})</span>`
+        ).join(' ');
+    }
+
+    let recsHtml = '';
+    if (a.recommendations && a.recommendations.length > 0) {
+        recsHtml = '<ul>' + a.recommendations.map(r => `<li>${r}</li>`).join('') + '</ul>';
+    }
+
+    showModal('\ud83e\udde0 Analysis Results', `
+        <div class="analysis-detail">
+            <img src="${API_BASE}/camera/captures/${capture.id}/image" alt="Capture" class="analysis-preview-img">
+            <div class="analysis-grid">
+                <div class="analysis-item">
+                    <span class="label">Species</span>
+                    <span class="value">${a.plant_species || 'Unknown'}</span>
+                </div>
+                <div class="analysis-item">
+                    <span class="label">Confidence</span>
+                    <span class="value">${a.confidence ? (a.confidence * 100).toFixed(0) + '%' : 'N/A'}</span>
+                </div>
+                <div class="analysis-item">
+                    <span class="label">Height</span>
+                    <span class="value">${a.estimated_height_cm ? a.estimated_height_cm + ' cm' : 'N/A'}</span>
+                </div>
+                <div class="analysis-item">
+                    <span class="label">Width</span>
+                    <span class="value">${a.estimated_width_cm ? a.estimated_width_cm + ' cm' : 'N/A'}</span>
+                </div>
+                <div class="analysis-item">
+                    <span class="label">Health</span>
+                    <span class="value">${a.health_rating}/10</span>
+                </div>
+                <div class="analysis-item">
+                    <span class="label">Growth Stage</span>
+                    <span class="value">${a.growth_stage || 'N/A'}</span>
+                </div>
+            </div>
+            <div class="analysis-section">
+                <h4>Health Notes</h4>
+                <p>${a.health_notes || 'No notes'}</p>
+            </div>
+            <div class="analysis-section">
+                <h4>Pests</h4>
+                <p>${pestsHtml}</p>
+            </div>
+            ${recsHtml ? `<div class="analysis-section"><h4>Recommendations</h4>${recsHtml}</div>` : ''}
+        </div>
+    `);
+}
+
+async function loadCameraSchedules() {
+    try {
+        const response = await fetch(`${API_BASE}/camera/schedules`);
+        cameraSchedules = await response.json();
+        renderSchedules();
+    } catch (error) {
+        console.debug('Failed to load schedules:', error);
+    }
+}
+
+function renderSchedules() {
+    const container = document.getElementById('schedulesList');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (cameraSchedules.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'text-muted';
+        empty.textContent = 'No scheduled captures configured.';
+        container.appendChild(empty);
+        return;
+    }
+
+    cameraSchedules.forEach(sched => {
+        const row = document.createElement('div');
+        row.className = 'schedule-row card';
+
+        const info = document.createElement('div');
+        info.className = 'schedule-info';
+
+        const ep = cameraEndpoints.find(e => e.id === sched.endpoint_id);
+        const epName = document.createElement('strong');
+        epName.textContent = ep ? ep.name : `Endpoint #${sched.endpoint_id}`;
+        info.appendChild(epName);
+
+        const intervalText = document.createElement('span');
+        const hours = sched.interval_minutes / 60;
+        intervalText.textContent = hours >= 1 ? ` \u00b7 Every ${hours}h` : ` \u00b7 Every ${sched.interval_minutes}min`;
+        info.appendChild(intervalText);
+
+        if (sched.next_run) {
+            const nextRun = document.createElement('span');
+            nextRun.className = 'text-muted';
+            nextRun.textContent = ` \u00b7 Next: ${new Date(sched.next_run).toLocaleString()}`;
+            info.appendChild(nextRun);
+        }
+
+        row.appendChild(info);
+
+        const actions = document.createElement('div');
+        actions.className = 'schedule-actions';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'btn btn-sm ' + (sched.is_active ? 'btn-secondary' : 'btn-primary');
+        toggleBtn.textContent = sched.is_active ? '\u23f8 Pause' : '\u25b6 Resume';
+        toggleBtn.addEventListener('click', () => toggleSchedule(sched.id));
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.textContent = '\ud83d\uddd1\ufe0f';
+        delBtn.addEventListener('click', () => deleteSchedule(sched.id));
+
+        actions.appendChild(toggleBtn);
+        actions.appendChild(delBtn);
+        row.appendChild(actions);
+
+        container.appendChild(row);
+    });
+}
+
+async function addCaptureSchedule() {
+    const endpointId = document.getElementById('scheduleEndpointSelect')?.value;
+    const plantId = document.getElementById('schedulePlantSelect')?.value || null;
+    const interval = parseInt(document.getElementById('scheduleInterval')?.value || 360);
+
+    if (!endpointId) {
+        showToast('Select a camera endpoint', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/camera/schedules`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                endpoint_id: parseInt(endpointId),
+                plant_id: plantId ? parseInt(plantId) : null,
+                interval_minutes: interval
+            })
+        });
+
+        if (response.ok) {
+            showToast('Schedule added!', 'success');
+            await loadCameraSchedules();
+        } else {
+            const data = await response.json();
+            showToast(data.error || 'Failed to add schedule', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to add schedule', 'error');
+    }
+}
+
+async function toggleSchedule(scheduleId) {
+    try {
+        await fetch(`${API_BASE}/camera/schedules/${scheduleId}/toggle`, { method: 'POST' });
+        await loadCameraSchedules();
+    } catch (error) {
+        showToast('Failed to toggle schedule', 'error');
+    }
+}
+
+async function deleteSchedule(scheduleId) {
+    if (!confirm('Delete this schedule?')) return;
+    try {
+        await fetch(`${API_BASE}/camera/schedules/${scheduleId}`, { method: 'DELETE' });
+        showToast('Schedule deleted', 'success');
+        await loadCameraSchedules();
+    } catch (error) {
+        showToast('Failed to delete schedule', 'error');
+    }
 }

@@ -239,6 +239,89 @@ class GardenNote(db.Model):
         }
 
 
+# ============== Camera Models ==============
+
+class CameraEndpoint(db.Model):
+    """Tracks camera devices (Raspberry Pi endpoints)"""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    ssh_host = db.Column(db.String(200), nullable=False)
+    ssh_user = db.Column(db.String(100), default='pi')
+    ssh_port = db.Column(db.Integer, default=22)
+    capture_command = db.Column(db.String(500),
+        default='rpicam-still -o - --width 1920 --height 1080 -t 1000')
+    is_active = db.Column(db.Boolean, default=True)
+    last_seen = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    captures = db.relationship('CameraCapture', backref='endpoint', lazy=True)
+    schedules = db.relationship('CaptureSchedule', backref='endpoint', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'name': self.name,
+            'ssh_host': self.ssh_host, 'ssh_user': self.ssh_user,
+            'ssh_port': self.ssh_port, 'capture_command': self.capture_command,
+            'is_active': self.is_active,
+            'last_seen': self.last_seen.isoformat() if self.last_seen else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'capture_count': len(self.captures)
+        }
+
+
+class CameraCapture(db.Model):
+    """Stores captured images and their analysis results"""
+    id = db.Column(db.Integer, primary_key=True)
+    endpoint_id = db.Column(db.Integer, db.ForeignKey('camera_endpoint.id'))
+    plant_id = db.Column(db.Integer, db.ForeignKey('plant.id'), nullable=True)
+    filename = db.Column(db.String(500), nullable=False)
+    capture_type = db.Column(db.String(50), default='on_demand')
+    analysis_status = db.Column(db.String(50), default='pending')
+    analysis_result = db.Column(db.Text)
+    captured_at = db.Column(db.DateTime, default=datetime.utcnow)
+    analyzed_at = db.Column(db.DateTime)
+
+    plant = db.relationship('Plant', backref='camera_captures')
+
+    def to_dict(self):
+        result = {
+            'id': self.id, 'endpoint_id': self.endpoint_id,
+            'plant_id': self.plant_id,
+            'filename': self.filename,
+            'capture_type': self.capture_type,
+            'analysis_status': self.analysis_status,
+            'analysis_result': json.loads(self.analysis_result) if self.analysis_result else None,
+            'captured_at': self.captured_at.isoformat() if self.captured_at else None,
+            'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None
+        }
+        if self.plant:
+            result['plant_name'] = self.plant.display_name
+        return result
+
+
+class CaptureSchedule(db.Model):
+    """Configurable capture schedules"""
+    id = db.Column(db.Integer, primary_key=True)
+    endpoint_id = db.Column(db.Integer, db.ForeignKey('camera_endpoint.id'))
+    plant_id = db.Column(db.Integer, db.ForeignKey('plant.id'), nullable=True)
+    interval_minutes = db.Column(db.Integer, default=360)
+    is_active = db.Column(db.Boolean, default=True)
+    last_run = db.Column(db.DateTime)
+    next_run = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id, 'endpoint_id': self.endpoint_id,
+            'plant_id': self.plant_id,
+            'interval_minutes': self.interval_minutes,
+            'is_active': self.is_active,
+            'last_run': self.last_run.isoformat() if self.last_run else None,
+            'next_run': self.next_run.isoformat() if self.next_run else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
 # ============== LLM Service ==============
 
 LMSTUDIO_URL = os.environ.get('LLM_SERVICE_URL', 'http://localhost:1234/v1/chat/completions')
@@ -1402,6 +1485,276 @@ def apply_actions():
     
     db.session.commit()
     return jsonify({"results": results})
+
+
+# ============== Camera API Routes ==============
+
+from backend.camera_service import test_connection as cam_test_connection
+from backend.camera_service import capture_image as cam_capture_image
+from backend.camera_service import analyze_image as cam_analyze_image
+
+
+@app.route('/api/camera/endpoints', methods=['GET'])
+def get_camera_endpoints():
+    endpoints = CameraEndpoint.query.all()
+    return jsonify([ep.to_dict() for ep in endpoints])
+
+
+@app.route('/api/camera/endpoints', methods=['POST'])
+def create_camera_endpoint():
+    data = request.json
+    if not data or not data.get('name') or not data.get('ssh_host'):
+        return jsonify({'error': 'Name and SSH host are required'}), 400
+
+    # Validate SSH host format (basic sanity check)
+    ssh_host = data['ssh_host'].strip()
+    if not ssh_host or len(ssh_host) > 200:
+        return jsonify({'error': 'Invalid SSH host'}), 400
+
+    endpoint = CameraEndpoint(
+        name=data['name'][:100],
+        ssh_host=ssh_host,
+        ssh_user=data.get('ssh_user', 'pi')[:100],
+        ssh_port=int(data.get('ssh_port', 22)),
+        capture_command=data.get('capture_command',
+            'rpicam-still -o - --width 1920 --height 1080 -t 1000')[:500]
+    )
+    db.session.add(endpoint)
+    db.session.commit()
+    return jsonify(endpoint.to_dict()), 201
+
+
+@app.route('/api/camera/endpoints/<int:endpoint_id>', methods=['DELETE'])
+def delete_camera_endpoint(endpoint_id):
+    endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
+    db.session.delete(endpoint)
+    db.session.commit()
+    return '', 204
+
+
+@app.route('/api/camera/endpoints/<int:endpoint_id>/test', methods=['POST'])
+def test_camera_endpoint(endpoint_id):
+    endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
+    result = cam_test_connection(
+        ssh_host=endpoint.ssh_host,
+        ssh_user=endpoint.ssh_user,
+        ssh_port=endpoint.ssh_port
+    )
+    if result['reachable']:
+        endpoint.last_seen = datetime.utcnow()
+        db.session.commit()
+    return jsonify(result)
+
+
+@app.route('/api/camera/capture/<int:endpoint_id>', methods=['POST'])
+def capture_from_endpoint(endpoint_id):
+    endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
+    data = request.json or {}
+    plant_id = data.get('plant_id')
+
+    result = cam_capture_image(
+        ssh_host=endpoint.ssh_host,
+        ssh_user=endpoint.ssh_user,
+        ssh_port=endpoint.ssh_port,
+        capture_command=endpoint.capture_command,
+        endpoint_id=endpoint.id
+    )
+
+    if result['success']:
+        capture = CameraCapture(
+            endpoint_id=endpoint.id,
+            plant_id=plant_id,
+            filename=result['filename'],
+            capture_type='on_demand',
+            analysis_status='pending'
+        )
+        db.session.add(capture)
+        endpoint.last_seen = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'capture': capture.to_dict(),
+            'message': result['message']
+        }), 201
+
+    return jsonify({'success': False, 'error': result['message']}), 500
+
+
+@app.route('/api/camera/captures', methods=['GET'])
+def get_captures():
+    page_num = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 20, type=int), 100)
+    query = CameraCapture.query.order_by(CameraCapture.captured_at.desc())
+
+    plant_id = request.args.get('plant_id', type=int)
+    if plant_id:
+        query = query.filter_by(plant_id=plant_id)
+
+    paginated = query.paginate(page=page_num, per_page=per_page, error_out=False)
+    return jsonify({
+        'captures': [c.to_dict() for c in paginated.items],
+        'total': paginated.total,
+        'page': paginated.page,
+        'pages': paginated.pages
+    })
+
+
+@app.route('/api/camera/captures/<int:capture_id>', methods=['GET'])
+def get_capture(capture_id):
+    capture = CameraCapture.query.get_or_404(capture_id)
+    return jsonify(capture.to_dict())
+
+
+@app.route('/api/camera/captures/<int:capture_id>/image', methods=['GET'])
+def get_capture_image(capture_id):
+    """Serve the captured image file."""
+    capture = CameraCapture.query.get_or_404(capture_id)
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+    # Security: use only the basename to prevent path traversal
+    safe_filename = os.path.basename(capture.filename)
+    image_path = os.path.join(captures_dir, safe_filename)
+
+    # Validate resolved path stays within captures directory
+    resolved = os.path.realpath(image_path)
+    if not resolved.startswith(os.path.realpath(captures_dir) + os.sep):
+        return jsonify({'error': 'Invalid file path'}), 403
+
+    if not os.path.exists(resolved):
+        return jsonify({'error': 'Image not found'}), 404
+
+    return send_file(
+        resolved,
+        mimetype='image/jpeg',
+        download_name=safe_filename
+    )
+
+
+@app.route('/api/camera/captures/<int:capture_id>/analyze', methods=['POST'])
+def analyze_capture(capture_id):
+    """Run vision analysis on a captured image."""
+    capture = CameraCapture.query.get_or_404(capture_id)
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+    safe_filename = os.path.basename(capture.filename)
+    image_path = os.path.join(captures_dir, safe_filename)
+
+    # Get plant context if linked
+    plant_name = None
+    plant_variety = None
+    last_height = None
+    if capture.plant_id:
+        plant = Plant.query.get(capture.plant_id)
+        if plant:
+            plant_name = plant.display_name
+            plant_variety = plant.variety
+            # Get last height from growth logs
+            last_log = GrowthLog.query.filter_by(plant_id=plant.id)\
+                .order_by(GrowthLog.date.desc()).first()
+            if last_log and last_log.height_cm:
+                last_height = last_log.height_cm
+
+    capture.analysis_status = 'analyzing'
+    db.session.commit()
+
+    result = cam_analyze_image(
+        image_path=image_path,
+        plant_name=plant_name,
+        plant_variety=plant_variety,
+        last_height=last_height
+    )
+
+    if result['success']:
+        capture.analysis_status = 'complete'
+        capture.analysis_result = json.dumps(result['analysis'])
+        capture.analyzed_at = datetime.utcnow()
+        db.session.commit()
+
+        # Auto-create growth log if we have a linked plant and height data
+        analysis = result['analysis']
+        if capture.plant_id and analysis.get('estimated_height_cm'):
+            growth = GrowthLog(
+                plant_id=capture.plant_id,
+                date=capture.captured_at,
+                height_cm=analysis.get('estimated_height_cm'),
+                width_cm=analysis.get('estimated_width_cm'),
+                health_rating=analysis.get('health_rating'),
+                notes=f"Auto-logged from camera analysis: {analysis.get('health_notes', '')}",
+                image_url=f'/api/camera/captures/{capture.id}/image'
+            )
+            db.session.add(growth)
+
+        # Auto-create pest issues if detected
+        if capture.plant_id and analysis.get('pests_detected'):
+            for pest in analysis['pests_detected']:
+                if pest.get('type'):
+                    pest_issue = PestIssue(
+                        plant_id=capture.plant_id,
+                        date_identified=capture.captured_at,
+                        pest_type=pest['type'][:100],
+                        severity=pest.get('severity', 'moderate'),
+                        notes=f'Detected via camera analysis (capture #{capture.id})'
+                    )
+                    db.session.add(pest_issue)
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'analysis': result['analysis'],
+            'capture': capture.to_dict()
+        })
+    else:
+        capture.analysis_status = 'failed'
+        db.session.commit()
+        return jsonify({
+            'success': False,
+            'error': result.get('error', 'Analysis failed')
+        }), 500
+
+
+@app.route('/api/camera/schedules', methods=['GET'])
+def get_capture_schedules():
+    schedules = CaptureSchedule.query.all()
+    return jsonify([s.to_dict() for s in schedules])
+
+
+@app.route('/api/camera/schedules', methods=['POST'])
+def create_capture_schedule():
+    data = request.json
+    if not data or not data.get('endpoint_id'):
+        return jsonify({'error': 'endpoint_id is required'}), 400
+
+    endpoint = CameraEndpoint.query.get_or_404(data['endpoint_id'])
+    interval = max(5, min(int(data.get('interval_minutes', 360)), 1440))
+
+    schedule = CaptureSchedule(
+        endpoint_id=endpoint.id,
+        plant_id=data.get('plant_id'),
+        interval_minutes=interval,
+        is_active=data.get('is_active', True),
+        next_run=datetime.utcnow() + timedelta(minutes=interval)
+    )
+    db.session.add(schedule)
+    db.session.commit()
+    return jsonify(schedule.to_dict()), 201
+
+
+@app.route('/api/camera/schedules/<int:schedule_id>', methods=['DELETE'])
+def delete_capture_schedule(schedule_id):
+    schedule = CaptureSchedule.query.get_or_404(schedule_id)
+    db.session.delete(schedule)
+    db.session.commit()
+    return '', 204
+
+
+@app.route('/api/camera/schedules/<int:schedule_id>/toggle', methods=['POST'])
+def toggle_capture_schedule(schedule_id):
+    schedule = CaptureSchedule.query.get_or_404(schedule_id)
+    schedule.is_active = not schedule.is_active
+    db.session.commit()
+    return jsonify(schedule.to_dict())
 
 
 # Initialize database

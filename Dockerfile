@@ -21,9 +21,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 FROM python:3.11-slim AS runner
 WORKDIR /app
 
-# Install wget for healthcheck + fonts for QR label generation
+# Install wget for healthcheck + fonts for QR label generation + SSH for Pi camera
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends wget fonts-dejavu-core openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

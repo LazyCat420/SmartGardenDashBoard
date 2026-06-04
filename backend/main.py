@@ -18,9 +18,11 @@ import uuid
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 
-# Database configuration
+# Database configuration — use DATABASE_URL env var for PostgreSQL,
+# fall back to SQLite for local development
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'garden.db')
+DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///' + os.path.join(basedir, 'garden.db'))
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -239,8 +241,8 @@ class GardenNote(db.Model):
 
 # ============== LLM Service ==============
 
-LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
-MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"
+LMSTUDIO_URL = os.environ.get('LLM_SERVICE_URL', 'http://localhost:1234/v1/chat/completions')
+MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'ibm-granite/granite-3.3-8b-instruct')
 
 # Try to load settings from file
 # Try to load settings from file - REVERTED

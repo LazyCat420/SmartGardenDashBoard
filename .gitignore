@@ -71,3 +71,7 @@ node_modules/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Deploy artifacts
+.deploy-logs/
+captures/

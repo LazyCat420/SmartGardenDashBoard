@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  smartgarden-dashboard:
+    image: smartgarden-dashboard:latest
+    container_name: smartgarden-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=America/Los_Angeles
+      - DATABASE_URL=postgresql://smartgarden:smartgarden_pass@10.0.0.16:5433/smartgarden
+      - LLM_SERVICE_URL=http://10.0.0.16:7777/v1/chat/completions
+      - LLM_MODEL_NAME=ibm-granite/granite-3.3-8b-instruct
+      - FLASK_PORT=5000
+      - FLASK_WORKERS=2
+    volumes:
+      - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./captures:/app/captures
+    ports:
+      - "5050:5000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

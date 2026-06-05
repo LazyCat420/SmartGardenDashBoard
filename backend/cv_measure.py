@@ -153,12 +153,23 @@ def detect_reference_yolo(image, ref_type):
 
 # ── OpenCV contour-based reference object detection ──────────────
 
+# Expected size of each reference object relative to image area.
+# Format: (min_fraction, ideal_fraction, max_fraction) of image area.
+# A 1920x1080 image = ~2M pixels.  AA battery ≈ 50×140px = 7000px² ≈ 0.003
+EXPECTED_SIZE_FRACTIONS = {
+    'aa_battery':  (0.0005, 0.004,  0.03),   # Very small object
+    'bic_lighter': (0.001,  0.008,  0.05),    # Small object
+    'credit_card': (0.005,  0.02,   0.10),    # Medium object
+    'soda_can':    (0.005,  0.03,   0.12),    # Medium-large object
+}
+
+
 def detect_reference_contour(image, ref_type):
     """
     Detect a reference object using OpenCV contour analysis.
 
-    Uses edge detection + aspect ratio filtering based on the
-    known dimensions of the reference object type.
+    Uses edge detection + aspect ratio filtering + expected-size scoring
+    based on the known dimensions of the reference object type.
 
     Returns the best bounding box as (x, y, w, h) in pixels,
     or None if no suitable contour was found.
@@ -168,6 +179,7 @@ def detect_reference_contour(image, ref_type):
         return None
 
     import cv2
+    import math
 
     expected_aspect = dims['height_cm'] / dims['width_cm']
     # Allow ±40% tolerance on aspect ratio
@@ -176,6 +188,13 @@ def detect_reference_contour(image, ref_type):
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     h_img, w_img = gray.shape[:2]
+    img_area = h_img * w_img
+
+    # Get expected size range for this object type
+    size_fracs = EXPECTED_SIZE_FRACTIONS.get(ref_type, (0.001, 0.01, 0.15))
+    min_area = img_area * size_fracs[0]
+    ideal_area = img_area * size_fracs[1]
+    max_area = img_area * size_fracs[2]
 
     # Apply Gaussian blur to reduce noise
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -185,15 +204,14 @@ def detect_reference_contour(image, ref_type):
 
     # Dilate to close gaps in edges
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    edges = cv2.dilate(edges, kernel, iterations=1)
+    edges = cv2.dilate(edges, kernel, iterations=2)
+
+    # Close small gaps
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_close, iterations=1)
 
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
                                     cv2.CHAIN_APPROX_SIMPLE)
-
-    # Minimum size: reference object should be at least 1% of image area
-    min_area = h_img * w_img * 0.001
-    # Maximum size: reference object shouldn't be more than 25% of image
-    max_area = h_img * w_img * 0.25
 
     candidates = []
 
@@ -218,20 +236,46 @@ def detect_reference_contour(image, ref_type):
         if min_aspect <= aspect <= max_aspect:
             # Get the upright bounding rect
             x, y, w, h = cv2.boundingRect(contour)
-            # Score based on how close the aspect ratio matches
+
+            # ── Score based on aspect match + size match ─────────
+            # Aspect score: 1.0 = perfect match, 0.0 = at tolerance edge
             aspect_diff = abs(aspect - expected_aspect) / expected_aspect
-            score = (1.0 - aspect_diff) * area  # Prefer larger, better-matching
-            candidates.append((score, (x, y, w, h)))
+            aspect_score = max(0.0, 1.0 - aspect_diff)
+
+            # Size score: Gaussian penalty — peaks at ideal_area, drops off
+            # for objects that are way too big or too small
+            if ideal_area > 0:
+                log_ratio = math.log(area / ideal_area)
+                size_score = math.exp(-0.5 * (log_ratio / 1.0) ** 2)
+            else:
+                size_score = 1.0
+
+            # Combined score: aspect match matters most, size is a filter
+            score = aspect_score * size_score
+
+            candidates.append((score, (x, y, w, h), area, aspect))
+            logger.debug("Contour candidate: bbox=(%d,%d,%d,%d) area=%d "
+                         "aspect=%.2f aspect_score=%.3f size_score=%.3f "
+                         "total=%.3f",
+                         x, y, w, h, area, aspect,
+                         aspect_score, size_score, score)
 
     if not candidates:
+        logger.info("No contours matched %s (checked %d contours, "
+                     "area range %.0f-%.0f, aspect range %.2f-%.2f)",
+                     ref_type, len(contours), min_area, max_area,
+                     min_aspect, max_aspect)
         return None
 
     # Return the best candidate
     candidates.sort(key=lambda c: c[0], reverse=True)
-    best = candidates[0][1]
-    logger.info("OpenCV contour detected %s at %s (from %d candidates)",
-                 ref_type, best, len(candidates))
-    return best
+    best = candidates[0]
+    logger.info("OpenCV contour detected %s at %s (score=%.3f area=%d "
+                 "aspect=%.2f, from %d candidates)",
+                 ref_type, best[1], best[0], best[2], best[3],
+                 len(candidates))
+    return best[1]
+
 
 
 # ── Plant detection via HSV green segmentation ───────────────────
@@ -423,6 +467,97 @@ def measure_objects(image_path, ref_type=None,
                 _, _, pw, ph = plant_bbox_px
                 result['estimated_height_cm'] = round(ph / px_per_cm_h, 1)
                 result['estimated_width_cm'] = round(pw / px_per_cm_h, 1)
+
+    result['success'] = True
+    return result
+
+
+def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
+                              ref_width_cm=None, ref_height_cm=None,
+                              rotation=0, hflip=False, vflip=False):
+    """
+    Measure using a manually-drawn reference bounding box.
+
+    The user draws a box around the reference object in the UI.
+    We skip auto-detection and use their bbox directly, then
+    auto-detect the plant via green segmentation.
+
+    Parameters:
+        image_path:    Path to the captured image file
+        ref_bbox_norm: [ymin, xmin, ymax, xmax] in 0-1000 normalized scale
+        ref_type:      Type of reference object for known dimensions lookup
+        ref_width_cm:  Known width in cm (overrides lookup)
+        ref_height_cm: Known height in cm (overrides lookup)
+        rotation:      Image rotation (0, 90, 180, 270)
+        hflip:         Horizontal flip
+        vflip:         Vertical flip
+
+    Returns: dict with measurement results.
+    """
+    result = {
+        'success': False,
+        'reference_bbox': ref_bbox_norm,
+        'plant_bbox': None,
+        'estimated_height_cm': None,
+        'estimated_width_cm': None,
+        'pixels_per_cm': None,
+        'detection_method': 'manual',
+        'error': None,
+    }
+
+    try:
+        image = _load_image(image_path, rotation, hflip, vflip)
+    except (ValueError, FileNotFoundError) as exc:
+        result['error'] = str(exc)
+        return result
+
+    h_img, w_img = image.shape[:2]
+
+    # Convert normalized 0-1000 bbox to pixel coordinates
+    ymin_n, xmin_n, ymax_n, xmax_n = ref_bbox_norm
+    rx = int(xmin_n / 1000 * w_img)
+    ry = int(ymin_n / 1000 * h_img)
+    rw = int((xmax_n - xmin_n) / 1000 * w_img)
+    rh = int((ymax_n - ymin_n) / 1000 * h_img)
+    ref_bbox_px = (rx, ry, rw, rh)
+
+    logger.info("Manual reference bbox: px=(%d,%d,%d,%d) from norm=%s",
+                 rx, ry, rw, rh, ref_bbox_norm)
+
+    # ── Auto-detect plant ────────────────────────────────────────
+    plant_bbox_px = detect_plant_contour(image, exclude_bbox=ref_bbox_px)
+
+    if plant_bbox_px:
+        px, py, pw, ph = plant_bbox_px
+        result['plant_bbox'] = [
+            int(py / h_img * 1000),
+            int(px / w_img * 1000),
+            int((py + ph) / h_img * 1000),
+            int((px + pw) / w_img * 1000),
+        ]
+
+    # ── Calculate real-world dimensions ──────────────────────────
+    if ref_type and ref_type in KNOWN_DIMENSIONS:
+        if ref_height_cm is None:
+            ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
+        if ref_width_cm is None:
+            ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
+
+    if ref_height_cm or ref_width_cm:
+        if ref_height_cm and rh > 0:
+            px_per_cm = rh / ref_height_cm
+        elif ref_width_cm and rw > 0:
+            px_per_cm = rw / ref_width_cm
+        else:
+            px_per_cm = None
+
+        if px_per_cm and px_per_cm > 0:
+            result['pixels_per_cm'] = round(px_per_cm, 2)
+
+            if plant_bbox_px:
+                _, _, pw, ph = plant_bbox_px
+                result['estimated_height_cm'] = round(ph / px_per_cm, 1)
+                result['estimated_width_cm'] = round(pw / px_per_cm, 1)
 
     result['success'] = True
     return result

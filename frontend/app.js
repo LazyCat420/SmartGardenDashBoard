@@ -5354,6 +5354,22 @@ function renderCaptureGallery() {
             });
             buttonsRow.appendChild(measureBtn);
 
+            const calibrateBtn = document.createElement('button');
+            calibrateBtn.className = 'btn btn-sm btn-warning';
+            calibrateBtn.textContent = '📐 Calibrate';
+            calibrateBtn.title = 'Draw a box around the reference object';
+            calibrateBtn.addEventListener('click', () => {
+                const refType = refSelect.value;
+                const refWidth = wInput.value;
+                const refHeight = hInput.value;
+                openCalibrateModal(capture.id, {
+                    reference_type: refType,
+                    ref_width_cm: refWidth,
+                    ref_height_cm: refHeight
+                });
+            });
+            buttonsRow.appendChild(calibrateBtn);
+
             const analyzeBtn = document.createElement('button');
             analyzeBtn.className = 'btn btn-sm btn-primary';
             analyzeBtn.textContent = '🧠 Analyze';
@@ -5419,6 +5435,262 @@ async function measureCapture(captureId, options = {}) {
         }
     } catch (error) {
         showToast('Measurement request failed', 'error');
+    }
+}
+
+// ── Manual Calibration: Interactive bbox drawing ────────────────
+
+function openCalibrateModal(captureId, options = {}) {
+    const capture = cameraCaptures.find(c => c.id === captureId);
+    const ep = capture ? cameraEndpoints.find(e => e.id === capture.endpoint_id) : null;
+    const queryParams = ep ? `?r=${ep.rotation}&h=${ep.hflip ? 1 : 0}&v=${ep.vflip ? 1 : 0}` : '';
+
+    const modalBody = document.getElementById('modalBody');
+    const modalTitle = document.getElementById('modalTitle');
+    const overlay = document.getElementById('modalOverlay');
+    if (!modalBody || !modalTitle || !overlay) return;
+
+    const refLabel = options.reference_type
+        ? options.reference_type.replace(/_/g, ' ')
+        : 'reference object';
+    modalTitle.textContent = `📐 Draw box around the ${refLabel}`;
+    modalBody.replaceChildren();
+
+    // Instructions
+    const instructions = document.createElement('p');
+    instructions.style.cssText = 'color:var(--text-secondary);margin-bottom:12px;font-size:0.9rem;';
+    instructions.textContent = 'Click and drag on the image to draw a rectangle around the reference object. Then click Calibrate.';
+    modalBody.appendChild(instructions);
+
+    // Image + drawing canvas wrapper
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:relative;width:100%;display:inline-block;overflow:hidden;border-radius:var(--radius-md);margin-bottom:16px;cursor:crosshair;user-select:none;';
+
+    const img = document.createElement('img');
+    img.id = 'calibrateImg';
+    img.src = `${API_BASE}/camera/captures/${captureId}/image${queryParams}`;
+    img.alt = 'Capture';
+    img.style.cssText = 'width:100%;display:block;border-radius:var(--radius-md);';
+    img.draggable = false;
+    wrapper.appendChild(img);
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'calibrateCanvas';
+    canvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;';
+    wrapper.appendChild(canvas);
+
+    modalBody.appendChild(wrapper);
+
+    // Action row
+    const actionRow = document.createElement('div');
+    actionRow.style.cssText = 'display:flex;gap:10px;align-items:center;justify-content:space-between;';
+
+    const statusText = document.createElement('span');
+    statusText.id = 'calibrateStatus';
+    statusText.style.cssText = 'color:var(--text-secondary);font-size:0.85rem;';
+    statusText.textContent = 'No box drawn yet';
+    actionRow.appendChild(statusText);
+
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display:flex;gap:8px;';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'btn btn-sm btn-secondary';
+    clearBtn.textContent = '🗑️ Clear';
+    clearBtn.addEventListener('click', () => {
+        drawnBox = null;
+        statusText.textContent = 'No box drawn yet';
+        calibBtn.disabled = true;
+        redrawCanvas();
+    });
+    btnGroup.appendChild(clearBtn);
+
+    const calibBtn = document.createElement('button');
+    calibBtn.className = 'btn btn-sm btn-warning';
+    calibBtn.textContent = '📐 Calibrate';
+    calibBtn.disabled = true;
+    calibBtn.addEventListener('click', () => {
+        if (!drawnBox) return;
+        submitCalibration(captureId, drawnBox, options);
+    });
+    btnGroup.appendChild(calibBtn);
+
+    actionRow.appendChild(btnGroup);
+    modalBody.appendChild(actionRow);
+
+    overlay.classList.add('active');
+
+    // ── Drawing state ───────────────────────────────────────────
+    let drawnBox = null;  // {x1, y1, x2, y2} in 0-1 fractions
+    let isDrawing = false;
+
+    function getRelativePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+    }
+
+    function redrawCanvas() {
+        const ctx = canvas.getContext('2d');
+        canvas.width = canvas.offsetWidth * (window.devicePixelRatio || 1);
+        canvas.height = canvas.offsetHeight * (window.devicePixelRatio || 1);
+        ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+        const cw = canvas.offsetWidth;
+        const ch = canvas.offsetHeight;
+        ctx.clearRect(0, 0, cw, ch);
+
+        if (drawnBox) {
+            const x = Math.min(drawnBox.x1, drawnBox.x2) * cw;
+            const y = Math.min(drawnBox.y1, drawnBox.y2) * ch;
+            const w = Math.abs(drawnBox.x2 - drawnBox.x1) * cw;
+            const h = Math.abs(drawnBox.y2 - drawnBox.y1) * ch;
+
+            // Semi-transparent overlay outside the box
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, cw, ch);
+            ctx.clearRect(x, y, w, h);
+
+            // Box outline
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, w, h);
+
+            // Corner handles
+            const handleSize = 8;
+            ctx.fillStyle = '#f59e0b';
+            [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(([cx, cy]) => {
+                ctx.fillRect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
+            });
+
+            // Label
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillStyle = '#f59e0b';
+            const label = `${refLabel} (${Math.round(w)}\u00d7${Math.round(h)}px)`;
+            ctx.fillText(label, x + 4, y - 6);
+        }
+    }
+
+    const setupDrawing = () => {
+        canvas.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            isDrawing = true;
+            const pos = getRelativePos(e);
+            drawnBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const pos = getRelativePos(e);
+            drawnBox.x2 = pos.x;
+            drawnBox.y2 = pos.y;
+            redrawCanvas();
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            const pos = getRelativePos(e);
+            drawnBox.x2 = pos.x;
+            drawnBox.y2 = pos.y;
+
+            const boxW = Math.abs(drawnBox.x2 - drawnBox.x1);
+            const boxH = Math.abs(drawnBox.y2 - drawnBox.y1);
+            if (boxW < 0.01 || boxH < 0.01) {
+                drawnBox = null;
+                statusText.textContent = 'Box too small \u2014 try again';
+                calibBtn.disabled = true;
+                redrawCanvas();
+                return;
+            }
+
+            statusText.textContent = '\u2705 Box drawn \u2014 click Calibrate';
+            calibBtn.disabled = false;
+            redrawCanvas();
+        });
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const pos = getRelativePos(touch);
+            isDrawing = true;
+            drawnBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (!isDrawing) return;
+            const touch = e.touches[0];
+            const pos = getRelativePos(touch);
+            drawnBox.x2 = pos.x;
+            drawnBox.y2 = pos.y;
+            redrawCanvas();
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', () => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            if (drawnBox) {
+                const boxW = Math.abs(drawnBox.x2 - drawnBox.x1);
+                const boxH = Math.abs(drawnBox.y2 - drawnBox.y1);
+                if (boxW < 0.01 || boxH < 0.01) {
+                    drawnBox = null;
+                    statusText.textContent = 'Box too small \u2014 try again';
+                    calibBtn.disabled = true;
+                } else {
+                    statusText.textContent = '\u2705 Box drawn \u2014 click Calibrate';
+                    calibBtn.disabled = false;
+                }
+            }
+            redrawCanvas();
+        });
+
+        redrawCanvas();
+    };
+
+    if (img.complete) {
+        setupDrawing();
+    } else {
+        img.addEventListener('load', setupDrawing);
+    }
+}
+
+async function submitCalibration(captureId, box, options) {
+    // Convert 0-1 fractional coords to 0-1000 normalized [ymin, xmin, ymax, xmax]
+    const ymin = Math.round(Math.min(box.y1, box.y2) * 1000);
+    const xmin = Math.round(Math.min(box.x1, box.x2) * 1000);
+    const ymax = Math.round(Math.max(box.y1, box.y2) * 1000);
+    const xmax = Math.round(Math.max(box.x1, box.x2) * 1000);
+
+    showToast('📐 Calibrating with manual bounding box...', 'info');
+
+    try {
+        const response = await fetch(`${API_BASE}/camera/captures/${captureId}/calibrate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                reference_bbox: [ymin, xmin, ymax, xmax],
+                reference_type: options.reference_type,
+                ref_width_cm: options.ref_width_cm,
+                ref_height_cm: options.ref_height_cm,
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            const height = data.estimated_height_cm;
+            const width = data.estimated_width_cm;
+            let msg = '📐 Calibration complete!';
+            if (height || width) {
+                msg += ` Plant: ${height || '?'}cm H \u00d7 ${width || '?'}cm W`;
+            }
+            showToast(msg, 'success');
+            viewMeasurementResults(captureId, data);
+        } else {
+            showToast('Calibration failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Calibration request failed', 'error');
     }
 }
 

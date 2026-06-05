@@ -1889,6 +1889,88 @@ def measure_capture(capture_id):
     return jsonify(result)
 
 
+@app.route('/api/camera/captures/<int:capture_id>/calibrate', methods=['POST'])
+def calibrate_capture(capture_id):
+    """Calibrate measurement using a manually-drawn reference bounding box.
+
+    The user draws a box around the reference object in the UI,
+    and we use the known dimensions to calculate pixels/cm,
+    then auto-detect the plant via green segmentation.
+    """
+    capture = CameraCapture.query.get_or_404(capture_id)
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+    safe_filename = os.path.basename(capture.filename)
+    image_path = os.path.join(captures_dir, safe_filename)
+
+    req_data = request.json or {}
+    ref_bbox = req_data.get('reference_bbox')  # [ymin, xmin, ymax, xmax] 0-1000
+
+    if not ref_bbox or len(ref_bbox) != 4:
+        return jsonify({
+            'success': False,
+            'error': 'reference_bbox is required as [ymin, xmin, ymax, xmax]'
+        }), 400
+
+    # Validate bbox values are in range
+    try:
+        ref_bbox = [int(v) for v in ref_bbox]
+    except (TypeError, ValueError):
+        return jsonify({
+            'success': False,
+            'error': 'reference_bbox values must be integers'
+        }), 400
+
+    if not all(0 <= v <= 1000 for v in ref_bbox):
+        return jsonify({
+            'success': False,
+            'error': 'reference_bbox values must be 0-1000'
+        }), 400
+
+    ref_type = req_data.get('reference_type')
+
+    ref_width_cm = None
+    ref_height_cm = None
+
+    if ref_type == 'soda_can':
+        ref_width_cm = 6.6
+        ref_height_cm = 12.2
+    elif ref_type == 'aa_battery':
+        ref_width_cm = 1.4
+        ref_height_cm = 5.0
+    elif ref_type == 'bic_lighter':
+        ref_width_cm = 2.5
+        ref_height_cm = 8.0
+    elif ref_type == 'credit_card':
+        ref_width_cm = 8.56
+        ref_height_cm = 5.4
+    elif ref_type == 'custom':
+        ref_width_cm = float(req_data.get('ref_width_cm')) if req_data.get('ref_width_cm') not in (None, '') else None
+        ref_height_cm = float(req_data.get('ref_height_cm')) if req_data.get('ref_height_cm') not in (None, '') else None
+
+    endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+    rotation = endpoint.rotation if endpoint else 0
+    hflip = endpoint.hflip if endpoint else False
+    vflip = endpoint.vflip if endpoint else False
+
+    try:
+        from backend.cv_measure import measure_with_manual_bbox
+        result = measure_with_manual_bbox(
+            image_path=image_path,
+            ref_bbox_norm=ref_bbox,
+            ref_type=ref_type,
+            ref_width_cm=ref_width_cm,
+            ref_height_cm=ref_height_cm,
+            rotation=rotation,
+            hflip=hflip,
+            vflip=vflip,
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    return jsonify(result)
+
+
 @app.route('/api/camera/schedules', methods=['GET'])
 def get_capture_schedules():
     schedules = CaptureSchedule.query.all()

@@ -1508,6 +1508,7 @@ def apply_actions():
 from backend.camera_service import test_connection as cam_test_connection
 from backend.camera_service import capture_image as cam_capture_image
 from backend.camera_service import analyze_image as cam_analyze_image
+from backend.camera_service import reinitialize_camera as cam_reinitialize_camera
 # cv_measure is imported lazily inside measure_capture() to avoid
 # crashing the app at startup if OpenCV system libs are missing.
 
@@ -1611,6 +1612,23 @@ def test_camera_endpoint(endpoint_id):
         endpoint.last_seen = datetime.utcnow()
         db.session.commit()
     return jsonify(result)
+
+
+@app.route('/api/camera/endpoints/<int:endpoint_id>/reinitialize', methods=['POST'])
+def reinitialize_camera_endpoint(endpoint_id):
+    """Remotely reload camera kernel modules on the Pi.
+
+    Use this when the camera becomes unavailable after a Pi reboot.
+    It unloads/reloads the ArduCam driver and verifies the camera comes back.
+    """
+    endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
+    result = cam_reinitialize_camera(
+        ssh_host=endpoint.ssh_host,
+        ssh_user=endpoint.ssh_user,
+        ssh_port=endpoint.ssh_port
+    )
+    status_code = 200 if result.get('success') else 500
+    return jsonify(result), status_code
 
 
 @app.route('/api/camera/capture/<int:endpoint_id>', methods=['POST'])

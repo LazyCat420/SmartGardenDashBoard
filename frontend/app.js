@@ -4904,12 +4904,19 @@ function renderCameraEndpoints() {
         testBtn.textContent = '\ud83d\udd0c Test';
         testBtn.addEventListener('click', () => testCameraEndpoint(ep.id));
 
+        const reinitBtn = document.createElement('button');
+        reinitBtn.className = 'btn btn-sm btn-warning';
+        reinitBtn.textContent = '\ud83d\udd04 Reinit Camera';
+        reinitBtn.title = 'Reload camera kernel modules on the Pi (use after reboot)';
+        reinitBtn.addEventListener('click', () => reinitializeCamera(ep.id));
+
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'btn btn-sm btn-danger';
         deleteBtn.textContent = '\ud83d\uddd1\ufe0f Delete';
         deleteBtn.addEventListener('click', () => deleteCameraEndpoint(ep.id));
 
         actions.appendChild(testBtn);
+        actions.appendChild(reinitBtn);
         actions.appendChild(deleteBtn);
 
         card.appendChild(header);
@@ -5083,14 +5090,37 @@ async function testCameraEndpoint(endpointId) {
             method: 'POST'
         });
         const data = await response.json();
-        if (data.reachable) {
-            showToast('\u2705 Connection successful!', 'success');
+        if (data.reachable && data.camera_available) {
+            showToast('\u2705 SSH connected \u2014 Camera detected!', 'success');
+            await loadCameraEndpoints();
+        } else if (data.reachable && data.camera_available === false) {
+            showToast('\u26a0\ufe0f SSH OK but NO CAMERA detected. Try "Reinit Camera" button.', 'warning');
+            await loadCameraEndpoints();
+        } else if (data.reachable) {
+            showToast('\u2705 SSH connected \u2014 camera status unknown', 'success');
             await loadCameraEndpoints();
         } else {
             showToast(`\u274c ${data.message}`, 'error');
         }
     } catch (error) {
         showToast('Test failed', 'error');
+    }
+}
+
+async function reinitializeCamera(endpointId) {
+    showToast('\ud83d\udd04 Reinitializing camera modules...', 'info');
+    try {
+        const response = await fetch(`${API_BASE}/camera/endpoints/${endpointId}/reinitialize`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('\u2705 Camera reinitialized! Try capturing now.', 'success');
+        } else {
+            showToast(`\u274c ${data.message}`, 'error');
+        }
+    } catch (error) {
+        showToast('Reinitialize request failed', 'error');
     }
 }
 

@@ -22,8 +22,11 @@ FROM python:3.11-slim AS runner
 WORKDIR /app
 
 # Install wget for healthcheck + fonts for QR label generation + SSH for Pi camera
+# + libgl1/libglib2 for OpenCV headless
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget fonts-dejavu-core openssh-client \
+    && apt-get install -y --no-install-recommends \
+       wget fonts-dejavu-core openssh-client \
+       libgl1-mesa-glx libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -40,6 +43,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # ── Copy backend source ──────────────────────────────────────
 COPY backend/ ./backend/
+
+# ── Pre-download YOLOv8-nano model ───────────────────────────
+# Downloads at build time so the container works offline.
+RUN mkdir -p ./backend/models \
+    && python -c "from ultralytics import YOLO; m = YOLO('yolov8n.pt'); m.export(format='onnx', imgsz=640)" \
+    && mv yolov8n.onnx ./backend/models/yolov8n.onnx \
+    && rm -f yolov8n.pt || echo 'YOLO model pre-download skipped (will download at first run)'
 
 # ── Copy frontend source ─────────────────────────────────────
 COPY frontend/ ./frontend/

@@ -22,11 +22,9 @@ FROM python:3.11-slim AS runner
 WORKDIR /app
 
 # Install wget for healthcheck + fonts for QR label generation + SSH for Pi camera
-# + libgl1/libglib2 for OpenCV headless
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        wget fonts-dejavu-core openssh-client \
-       libgl1-mesa-glx libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

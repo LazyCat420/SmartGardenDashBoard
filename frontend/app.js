@@ -5730,8 +5730,8 @@ function viewMeasurementResults(captureId, data) {
     grid.className = 'analysis-grid';
     const items = [
         ['Method', data.detection_method || 'N/A'],
-        ['Height', data.estimated_height_cm ? data.estimated_height_cm + ' cm' : 'N/A'],
-        ['Width', data.estimated_width_cm ? data.estimated_width_cm + ' cm' : 'N/A'],
+        ['Height', data.estimated_width_cm ? data.estimated_width_cm + ' cm' : 'N/A'],
+        ['Width', data.estimated_height_cm ? data.estimated_height_cm + ' cm' : 'N/A'],
         ['Pixels/cm', data.pixels_per_cm || 'N/A'],
     ];
     items.forEach(([label, value]) => {
@@ -5796,7 +5796,7 @@ function viewMeasurementResults(captureId, data) {
             ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
             ctx.fillRect(xmin, ymin, w, h);
             ctx.fillStyle = '#10b981';
-            const heightCm = data.estimated_height_cm;
+            const heightCm = data.estimated_width_cm;
             const label = `Plant (${heightCm ? heightCm + ' cm' : 'height unclear'})`;
             const tw = ctx.measureText(label).width;
             const th = Math.max(16, Math.round(canvas.width * 0.022));

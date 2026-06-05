@@ -22,9 +22,11 @@ FROM python:3.11-slim AS runner
 WORKDIR /app
 
 # Install wget for healthcheck + fonts for QR label generation + SSH for Pi camera
+# + OpenCV runtime deps (Debian Bookworm package names)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        wget fonts-dejavu-core openssh-client \
+       libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

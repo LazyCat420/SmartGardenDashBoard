@@ -1508,7 +1508,8 @@ def apply_actions():
 from backend.camera_service import test_connection as cam_test_connection
 from backend.camera_service import capture_image as cam_capture_image
 from backend.camera_service import analyze_image as cam_analyze_image
-from backend.cv_measure import measure_objects as cv_measure_objects
+# cv_measure is imported lazily inside measure_capture() to avoid
+# crashing the app at startup if OpenCV system libs are missing.
 
 
 @app.route('/api/camera/endpoints', methods=['GET'])
@@ -1872,6 +1873,7 @@ def measure_capture(capture_id):
     vflip = endpoint.vflip if endpoint else False
 
     try:
+        from backend.cv_measure import measure_objects as cv_measure_objects
         result = cv_measure_objects(
             image_path=image_path,
             ref_type=ref_type,

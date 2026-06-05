@@ -11,8 +11,9 @@ import io
 import logging
 from pathlib import Path
 
-import cv2
-import numpy as np
+# NOTE: cv2 and numpy are imported lazily inside functions to avoid
+# crashing the entire app if OpenCV system libs are missing.
+# This way the dashboard still serves other endpoints.
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ def _get_yolo_model():
 
 def _apply_transforms(image, rotation=0, hflip=False, vflip=False):
     """Apply rotation and flip transforms to a cv2 image (BGR)."""
+    import cv2
     if hflip:
         image = cv2.flip(image, 1)
     if vflip:
@@ -94,6 +96,7 @@ def _apply_transforms(image, rotation=0, hflip=False, vflip=False):
 
 def _load_image(image_path, rotation=0, hflip=False, vflip=False):
     """Load an image from disk with safety checks and transforms."""
+    import cv2
     resolved = os.path.realpath(image_path)
     captures_real = os.path.realpath(CAPTURES_DIR) + os.sep
 
@@ -163,6 +166,8 @@ def detect_reference_contour(image, ref_type):
     dims = KNOWN_DIMENSIONS.get(ref_type)
     if not dims:
         return None
+
+    import cv2
 
     expected_aspect = dims['height_cm'] / dims['width_cm']
     # Allow ±40% tolerance on aspect ratio
@@ -243,6 +248,9 @@ def detect_plant_contour(image, exclude_bbox=None):
     Returns the bounding box as (x, y, w, h) in pixels,
     or None if no plant-like region was found.
     """
+    import cv2
+    import numpy as np
+
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     h_img, w_img = image.shape[:2]
 

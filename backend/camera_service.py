@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 # Directory for captured images (volume-mounted in Docker)
 CAPTURES_DIR = os.environ.get('CAPTURES_DIR', '/app/captures')
 
+# Common SSH options used by all SSH/SCP commands.
+# UserKnownHostsFile=/dev/null prevents write failures when the
+# container's ~/.ssh directory is mounted read-only.
+SSH_OPTS = [
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'UserKnownHostsFile=/dev/null',
+    '-o', 'ConnectTimeout=10',
+    '-o', 'BatchMode=yes',
+    '-o', 'LogLevel=ERROR',
+]
+
 
 def ensure_captures_dir():
     """Ensure the captures directory exists."""
@@ -27,15 +38,18 @@ def ensure_captures_dir():
 
 
 def test_connection(ssh_host, ssh_user='pi', ssh_port=22):
-    """Test SSH connectivity to a Pi endpoint.
+    """Test SSH connectivity AND camera availability on a Pi endpoint.
 
-    Returns dict with 'reachable' bool and 'message' string.
+    Two-phase test:
+      1. SSH connectivity — runs 'echo OK'
+      2. Camera check — runs 'libcamera-hello --list-cameras' to see if
+         the camera hardware is registered with libcamera.
+
+    Returns dict with 'reachable' bool, 'camera_available' bool, and 'message' string.
     """
+    # Phase 1: SSH connectivity
     cmd = [
-        'ssh',
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ConnectTimeout=10',
-        '-o', 'BatchMode=yes',
+        'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
         f'{ssh_user}@{ssh_host}',
         'echo OK'
@@ -47,18 +61,129 @@ def test_connection(ssh_host, ssh_user='pi', ssh_port=22):
             text=True,
             timeout=15
         )
-        if result.returncode == 0 and 'OK' in result.stdout:
-            return {'reachable': True, 'message': 'Connection successful'}
-        return {
-            'reachable': False,
-            'message': f'SSH failed (exit {result.returncode}): {result.stderr.strip()}'
-        }
+        if result.returncode != 0 or 'OK' not in result.stdout:
+            return {
+                'reachable': False,
+                'camera_available': False,
+                'message': f'SSH failed (exit {result.returncode}): {result.stderr.strip()}'
+            }
     except subprocess.TimeoutExpired:
-        return {'reachable': False, 'message': 'Connection timed out after 15s'}
+        return {'reachable': False, 'camera_available': False, 'message': 'Connection timed out after 15s'}
     except FileNotFoundError:
-        return {'reachable': False, 'message': 'SSH client not installed in container'}
+        return {'reachable': False, 'camera_available': False, 'message': 'SSH client not installed in container'}
     except Exception as e:
-        return {'reachable': False, 'message': str(e)}
+        return {'reachable': False, 'camera_available': False, 'message': str(e)}
+
+    # Phase 2: Camera availability check
+    cam_cmd = [
+        'ssh', *SSH_OPTS,
+        '-p', str(ssh_port),
+        f'{ssh_user}@{ssh_host}',
+        'libcamera-hello --list-cameras 2>&1 || rpicam-hello --list-cameras 2>&1 || echo NO_CAMERAS'
+    ]
+    try:
+        cam_result = subprocess.run(
+            cam_cmd,
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        cam_output = cam_result.stdout.strip() + cam_result.stderr.strip()
+        has_camera = (
+            'no cameras available' not in cam_output.lower()
+            and 'NO_CAMERAS' not in cam_output
+            and cam_result.returncode == 0
+        )
+        if has_camera:
+            return {
+                'reachable': True,
+                'camera_available': True,
+                'message': 'SSH connected — camera detected'
+            }
+        else:
+            return {
+                'reachable': True,
+                'camera_available': False,
+                'message': ('SSH connected but NO CAMERA detected. '
+                            'The Pi may need a reboot or the camera driver '
+                            'needs to be reloaded. Try the "Reinitialize Camera" button.')
+            }
+    except Exception:
+        # Camera check failed but SSH is fine
+        return {
+            'reachable': True,
+            'camera_available': None,
+            'message': 'SSH connected — could not verify camera status'
+        }
+
+
+def reinitialize_camera(ssh_host, ssh_user='pi', ssh_port=22):
+    """Remotely reinitialize the camera subsystem on a Pi.
+
+    After a Pi reboot the ArduCam Pivariety driver sometimes fails to
+    register.  This function SSHes in and reloads the relevant kernel
+    modules / restarts the libcamera service so the camera comes back.
+
+    Returns dict with 'success' bool and 'message'/'output' strings.
+    """
+    # Chain of commands to reload the camera stack:
+    #   1. Unload and reload the arducam module (if present)
+    #   2. Restart the libcamera-related services
+    #   3. Quick verify with rpicam-hello / libcamera-hello
+    reinit_script = (
+        'set -e; '
+        'echo "=== Reloading camera modules ==="; '
+        'sudo modprobe -r arducam_pivariety 2>/dev/null || true; '
+        'sudo modprobe arducam_pivariety 2>/dev/null || true; '
+        'sudo modprobe -r imx708 2>/dev/null || true; '
+        'sudo modprobe imx708 2>/dev/null || true; '
+        'sleep 2; '
+        'echo "=== Checking camera availability ==="; '
+        'rpicam-hello --list-cameras 2>&1 || libcamera-hello --list-cameras 2>&1 || echo "NO_CAMERAS_FOUND"'
+    )
+
+    cmd = [
+        'ssh', *SSH_OPTS,
+        '-p', str(ssh_port),
+        f'{ssh_user}@{ssh_host}',
+        reinit_script
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        output = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        if 'NO_CAMERAS_FOUND' in output:
+            return {
+                'success': False,
+                'message': ('Camera modules reloaded but still no camera detected. '
+                            'Try physically reseating the camera cable and rebooting the Pi.'),
+                'output': output + '\n' + stderr
+            }
+
+        if result.returncode != 0:
+            return {
+                'success': False,
+                'message': f'Reinitialize failed (exit {result.returncode})',
+                'output': output + '\n' + stderr
+            }
+
+        return {
+            'success': True,
+            'message': 'Camera modules reloaded successfully',
+            'output': output
+        }
+
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'message': 'Reinitialize timed out after 30s'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
 
 
 def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
@@ -87,10 +212,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
         return {'success': False, 'message': 'Invalid capture path'}
 
     cmd_trigger = [
-        'ssh',
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ConnectTimeout=10',
-        '-o', 'BatchMode=yes',
+        'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
         f'{ssh_user}@{ssh_host}',
         capture_command
@@ -111,6 +233,8 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
         cmd_scp_img = [
             'scp',
             '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'LogLevel=ERROR',
             '-P', str(ssh_port),
             f'{ssh_user}@{ssh_host}:~/image.jpg',
             resolved_img
@@ -121,6 +245,8 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
         cmd_scp_depth = [
             'scp',
             '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'LogLevel=ERROR',
             '-P', str(ssh_port),
             f'{ssh_user}@{ssh_host}:~/depth.npy',
             resolved_depth

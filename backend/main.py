@@ -1710,6 +1710,8 @@ def get_capture_image(capture_id):
     if not os.path.exists(resolved):
         return jsonify({'error': 'Image not found'}), 404
 
+    download_name = os.path.basename(resolved)
+
     # Apply orientation transformation on-the-fly if configured
     endpoint = CameraEndpoint.query.get(capture.endpoint_id)
     rotation = endpoint.rotation if endpoint else 0
@@ -1726,7 +1728,7 @@ def get_capture_image(capture_id):
             return send_file(
                 io.BytesIO(transformed_data),
                 mimetype='image/jpeg',
-                download_name=safe_filename
+                download_name=download_name
             )
         except Exception as e:
             app.logger.warning(f"Failed to transform served image: {e}")
@@ -1734,7 +1736,7 @@ def get_capture_image(capture_id):
     return send_file(
         resolved,
         mimetype='image/jpeg',
-        download_name=safe_filename
+        download_name=download_name
     )
 
 

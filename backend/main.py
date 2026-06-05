@@ -257,8 +257,8 @@ class CameraEndpoint(db.Model):
     last_seen = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    captures = db.relationship('CameraCapture', backref='endpoint', lazy=True)
-    schedules = db.relationship('CaptureSchedule', backref='endpoint', lazy=True)
+    captures = db.relationship('CameraCapture', backref='endpoint', lazy=True, cascade='all, delete-orphan')
+    schedules = db.relationship('CaptureSchedule', backref='endpoint', lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):
         return {

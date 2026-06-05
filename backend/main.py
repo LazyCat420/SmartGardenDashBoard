@@ -2052,23 +2052,20 @@ def toggle_capture_schedule(schedule_id):
 def init_db():
     with app.app_context():
         db.create_all()
-        # Auto-migration for SQLite to add ref_width_cm and ref_height_cm if missing
+        # Auto-migration: add ref_width_cm and ref_height_cm if missing
+        # Uses IF NOT EXISTS for PostgreSQL compatibility
         from sqlalchemy import text
         try:
-            db.session.execute(text('ALTER TABLE plant ADD COLUMN ref_width_cm FLOAT'))
+            db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_width_cm FLOAT'))
+            db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_height_cm FLOAT'))
             db.session.commit()
-            print("Added ref_width_cm column to plant table")
         except Exception:
             db.session.rollback()
-            
-        try:
-            db.session.execute(text('ALTER TABLE plant ADD COLUMN ref_height_cm FLOAT'))
-            db.session.commit()
-            print("Added ref_height_cm column to plant table")
-        except Exception:
-            db.session.rollback()
-            
+
         print("Database initialized!")
+
+# Run init_db at import time so gunicorn picks it up
+init_db()
 
 # Start background scheduler
 try:
@@ -2078,6 +2075,4 @@ except Exception as e:
     print(f"Failed to start background scheduler: {e}")
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True, port=5000)
-

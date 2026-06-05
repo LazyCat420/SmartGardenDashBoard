@@ -43,6 +43,8 @@ class Plant(db.Model):
     status = db.Column(db.String(50), default='active')
     notes = db.Column(db.Text)
     image_url = db.Column(db.String(500))
+    ref_width_cm = db.Column(db.Float)
+    ref_height_cm = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -74,6 +76,8 @@ class Plant(db.Model):
             'status': self.status,
             'notes': self.notes,
             'image_url': self.image_url,
+            'ref_width_cm': self.ref_width_cm,
+            'ref_height_cm': self.ref_height_cm,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'growth_logs': [log.to_dict() for log in self.growth_logs],
             'waterings': [w.to_dict() for w in self.waterings[-5:]],
@@ -743,7 +747,9 @@ def create_plant():
             expected_harvest=datetime.fromisoformat(data['expected_harvest']) if data.get('expected_harvest') else None,
             status=data.get('status', 'active'),
             notes=data.get('notes'),
-            image_url=data.get('image_url')
+            image_url=data.get('image_url'),
+            ref_width_cm=float(data.get('ref_width_cm')) if data.get('ref_width_cm') not in (None, '') else None,
+            ref_height_cm=float(data.get('ref_height_cm')) if data.get('ref_height_cm') not in (None, '') else None
         )
         db.session.add(plant)
         db.session.flush()  # Get the ID
@@ -766,6 +772,10 @@ def update_plant(plant_id):
     for key in ['date_planted', 'date_germinated', 'expected_harvest']:
         if key in data and data[key]:
             setattr(plant, key, datetime.fromisoformat(data[key]))
+    for key in ['ref_width_cm', 'ref_height_cm']:
+        if key in data:
+            val = data[key]
+            setattr(plant, key, float(val) if val not in (None, '') else None)
     db.session.commit()
     return jsonify(plant.to_dict())
 
@@ -1702,16 +1712,46 @@ def analyze_capture(capture_id):
     plant_name = None
     plant_variety = None
     last_height = None
+    db_ref_width_cm = None
+    db_ref_height_cm = None
     if capture.plant_id:
         plant = Plant.query.get(capture.plant_id)
         if plant:
             plant_name = plant.display_name
             plant_variety = plant.variety
+            db_ref_width_cm = plant.ref_width_cm
+            db_ref_height_cm = plant.ref_height_cm
             # Get last height from growth logs
             last_log = GrowthLog.query.filter_by(plant_id=plant.id)\
                 .order_by(GrowthLog.date.desc()).first()
             if last_log and last_log.height_cm:
                 last_height = last_log.height_cm
+
+    # Read reference details from request body if available
+    req_data = request.json or {}
+    ref_type = req_data.get('reference_type')
+    
+    ref_width_cm = None
+    ref_height_cm = None
+    
+    if ref_type == 'soda_can':
+        ref_width_cm = 6.6
+        ref_height_cm = 12.2
+    elif ref_type == 'aa_battery':
+        ref_width_cm = 1.4
+        ref_height_cm = 5.0
+    elif ref_type == 'bic_lighter':
+        ref_width_cm = 2.5
+        ref_height_cm = 8.0
+    elif ref_type == 'credit_card':
+        ref_width_cm = 8.56
+        ref_height_cm = 5.4
+    elif ref_type == 'custom':
+        ref_width_cm = float(req_data.get('ref_width_cm')) if req_data.get('ref_width_cm') not in (None, '') else None
+        ref_height_cm = float(req_data.get('ref_height_cm')) if req_data.get('ref_height_cm') not in (None, '') else None
+    elif ref_type == 'plant_pot' or not ref_type:
+        ref_width_cm = db_ref_width_cm
+        ref_height_cm = db_ref_height_cm
 
     capture.analysis_status = 'analyzing'
     db.session.commit()
@@ -1728,7 +1768,10 @@ def analyze_capture(capture_id):
         last_height=last_height,
         rotation=rotation,
         hflip=hflip,
-        vflip=vflip
+        vflip=vflip,
+        ref_width_cm=ref_width_cm,
+        ref_height_cm=ref_height_cm,
+        reference_type=ref_type or ('plant_pot' if (db_ref_width_cm or db_ref_height_cm) else None)
     )
 
     if result['success']:
@@ -1827,6 +1870,22 @@ def toggle_capture_schedule(schedule_id):
 def init_db():
     with app.app_context():
         db.create_all()
+        # Auto-migration for SQLite to add ref_width_cm and ref_height_cm if missing
+        from sqlalchemy import text
+        try:
+            db.session.execute(text('ALTER TABLE plant ADD COLUMN ref_width_cm FLOAT'))
+            db.session.commit()
+            print("Added ref_width_cm column to plant table")
+        except Exception:
+            db.session.rollback()
+            
+        try:
+            db.session.execute(text('ALTER TABLE plant ADD COLUMN ref_height_cm FLOAT'))
+            db.session.commit()
+            print("Added ref_height_cm column to plant table")
+        except Exception:
+            db.session.rollback()
+            
         print("Database initialized!")
 
 # Start background scheduler

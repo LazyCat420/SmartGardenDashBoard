@@ -220,7 +220,9 @@ def transform_image(image_data, rotation=0, hflip=False, vflip=False):
 
 def analyze_image(image_path, plant_name=None, plant_variety=None,
                   last_height=None, llm_url=None, llm_model=None,
-                  rotation=0, hflip=False, vflip=False):
+                  rotation=0, hflip=False, vflip=False,
+                  ref_width_cm=None, ref_height_cm=None,
+                  reference_type=None):
     """Send a captured image to the vision LLM for plant analysis.
 
     Returns dict with analysis results or error.
@@ -273,10 +275,24 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
 
     plant_context = '. '.join(context_parts) if context_parts else 'No prior plant information available.'
 
+    # Build calibration/reference context
+    calibration_context = []
+    if reference_type:
+        calibration_context.append(f"Reference object present in image: {reference_type}")
+    if ref_width_cm:
+        calibration_context.append(f"Reference object physical width: {ref_width_cm}cm")
+    if ref_height_cm:
+        calibration_context.append(f"Reference object physical height: {ref_height_cm}cm")
+        
+    calibration_str = '. '.join(calibration_context) if calibration_context else "No specific calibration reference object was declared, but look for a pot or standard household objects to estimate size."
+
     prompt = f"""Analyze this garden plant image. Return ONLY a valid JSON object with these fields:
 {{
   "plant_species": "identified species name or null if unclear",
   "confidence": 0.0 to 1.0,
+  "reference_object_detected": "soda_can|aa_battery|bic_lighter|credit_card|pot|custom|null",
+  "reference_bbox": [ymin, xmin, ymax, xmax],
+  "plant_bbox": [ymin, xmin, ymax, xmax],
   "estimated_height_cm": number or null,
   "estimated_width_cm": number or null,
   "health_rating": 1 to 10,
@@ -285,6 +301,12 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
   "growth_stage": "seedling|vegetative|flowering|fruiting|mature",
   "recommendations": ["list of care recommendations"]
 }}
+
+Calibration details:
+- {calibration_str}
+- The bboxes must be arrays of [ymin, xmin, ymax, xmax] in the range [0, 1000] relative to the image size.
+- "reference_bbox" must tightly bound the detected reference object (e.g. the pot or the soda can).
+- "plant_bbox" must tightly bound the entire plant (excluding the pot, starting from the soil line/rim of the pot to the top-most leaf).
 
 Plant context: {plant_context}
 
@@ -365,6 +387,41 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
             clean = '\n'.join(lines)
 
         analysis = json.loads(clean)
+        
+        # Calculate physical measurements if bounding boxes are returned
+        ref_bbox = analysis.get('reference_bbox')
+        plant_bbox = analysis.get('plant_bbox')
+        
+        if ref_bbox and len(ref_bbox) == 4 and plant_bbox and len(plant_bbox) == 4:
+            ref_h_px = abs(ref_bbox[2] - ref_bbox[0])
+            ref_w_px = abs(ref_bbox[3] - ref_bbox[1])
+            
+            plant_h_px = abs(plant_bbox[2] - plant_bbox[0])
+            plant_w_px = abs(plant_bbox[3] - plant_bbox[1])
+            
+            calibrated_h = None
+            calibrated_w = None
+            
+            if ref_height_cm and ref_h_px > 0:
+                scale_h = ref_h_px / ref_height_cm
+                calibrated_h = round(plant_h_px / scale_h, 1)
+                analysis['pixels_per_cm_h'] = round(scale_h, 3)
+                
+            if ref_width_cm and ref_w_px > 0:
+                scale_w = ref_w_px / ref_width_cm
+                calibrated_w = round(plant_w_px / scale_w, 1)
+                analysis['pixels_per_cm_w'] = round(scale_w, 3)
+                
+            if calibrated_h is not None:
+                analysis['calculated_height_cm'] = calibrated_h
+                # Set or override estimated height
+                analysis['estimated_height_cm'] = calibrated_h
+                
+            if calibrated_w is not None:
+                analysis['calculated_width_cm'] = calibrated_w
+                # Set or override estimated width
+                analysis['estimated_width_cm'] = calibrated_w
+        
         return {'success': True, 'analysis': analysis}
 
     except json.JSONDecodeError:

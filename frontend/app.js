@@ -2415,6 +2415,16 @@ function showAddPlantModal() {
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>Calibration Ref Width (cm)</label>
+                    <input type="number" step="0.1" name="ref_width_cm" placeholder="e.g., 15.0">
+                </div>
+                <div class="form-group">
+                    <label>Calibration Ref Height (cm)</label>
+                    <input type="number" step="0.1" name="ref_height_cm" placeholder="e.g., 12.0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>Date Planted</label>
                     <input type="date" name="date_planted">
                 </div>
@@ -2468,6 +2478,108 @@ async function handleAddPlant(e) {
         showToast('Failed to add plant', 'error');
     }
 }
+
+function showEditPlantModal(plantId) {
+    const plant = plants.find(p => p.id === parseInt(plantId));
+    if (!plant) return;
+    
+    // Format dates for input fields
+    const formatDateForInput = (dateStr) => {
+        if (!dateStr) return '';
+        return dateStr.split('T')[0];
+    };
+
+    showModal('Edit Plant Details', `
+        <form id="editPlantForm" data-plant-id="${plantId}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Plant Name *</label>
+                    <input type="text" name="name" required value="${plant.name || ''}" placeholder="e.g., Tomato">
+                </div>
+                <div class="form-group">
+                    <label>Variety</label>
+                    <input type="text" name="variety" value="${plant.variety || ''}" placeholder="e.g., Cherry">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Location</label>
+                    <input type="text" name="location" value="${plant.location || ''}" placeholder="e.g., Raised Bed 1">
+                </div>
+                <div class="form-group">
+                    <label>Status</label>
+                    <select name="status" style="width: 100%; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 14px;">
+                        <option value="active" ${plant.status === 'active' ? 'selected' : ''}>Active</option>
+                        <option value="harvested" ${plant.status === 'harvested' ? 'selected' : ''}>Harvested</option>
+                        <option value="removed" ${plant.status === 'removed' ? 'selected' : ''}>Removed</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Calibration Ref Width (cm)</label>
+                    <input type="number" step="0.1" name="ref_width_cm" value="${plant.ref_width_cm !== null && plant.ref_width_cm !== undefined ? plant.ref_width_cm : ''}" placeholder="e.g., 15.0">
+                </div>
+                <div class="form-group">
+                    <label>Calibration Ref Height (cm)</label>
+                    <input type="number" step="0.1" name="ref_height_cm" value="${plant.ref_height_cm !== null && plant.ref_height_cm !== undefined ? plant.ref_height_cm : ''}" placeholder="e.g., 12.0">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Date Planted</label>
+                    <input type="date" name="date_planted" value="${formatDateForInput(plant.date_planted)}">
+                </div>
+                <div class="form-group">
+                    <label>Expected Harvest</label>
+                    <input type="date" name="expected_harvest" value="${formatDateForInput(plant.expected_harvest)}">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <textarea name="notes" rows="3" placeholder="Any additional notes...">${plant.notes || ''}</textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    `);
+
+    document.getElementById('editPlantForm').addEventListener('submit', handleEditPlant);
+}
+
+async function handleEditPlant(e) {
+    e.preventDefault();
+    const form = e.target;
+    const plantId = form.getAttribute('data-plant-id');
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+
+    try {
+        const response = await fetch(`${API_BASE}/plants/${plantId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            showToast('Plant details updated!', 'success');
+            closeModal();
+            await loadPlants();
+            // Re-open plant detail view if we were in it
+            setTimeout(() => {
+                viewPlant(plantId);
+            }, 300);
+        } else {
+            showToast('Failed to update plant details', 'error');
+        }
+    } catch (error) {
+        showToast('Error updating plant', 'error');
+    }
+}
+
+window.showEditPlantModal = showEditPlantModal;
 
 function showAddTaskModal() {
     showModal('Add New Task', `
@@ -2700,6 +2812,16 @@ async function viewPlant(plantId) {
                     <p><span class="plant-status ${plant.status}">${plant.status}</span></p>
                 </div>
             </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Calibration Ref Width</label>
+                    <p>${plant.ref_width_cm !== null && plant.ref_width_cm !== undefined ? plant.ref_width_cm + ' cm' : 'Not specified'}</p>
+                </div>
+                <div class="form-group">
+                    <label>Calibration Ref Height</label>
+                    <p>${plant.ref_height_cm !== null && plant.ref_height_cm !== undefined ? plant.ref_height_cm + ' cm' : 'Not specified'}</p>
+                </div>
+            </div>
             ${plant.unique_code ? `
                 <div class="form-group">
                     <label>Plant Code</label>
@@ -2738,6 +2860,7 @@ async function viewPlant(plantId) {
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="logFertilization('${plant.id}')">🧪 Add Feeding</button>
                 <button class="btn btn-primary" onclick="showLabel('${plant.id}')">🏷️ Generate Label</button>
+                <button class="btn btn-secondary" onclick="showEditPlantModal('${plant.id}')">✏️ Edit Details</button>
                 <button class="btn btn-danger" onclick="deletePlant('${plant.id}')">Delete Plant</button>
                 <button class="btn btn-secondary" onclick="closeModal()">Close</button>
             </div>
@@ -5132,21 +5255,120 @@ function renderCaptureGallery() {
         // Actions
         const actions = document.createElement('div');
         actions.className = 'capture-actions';
+        actions.style.display = 'flex';
+        actions.style.flexDirection = 'column';
+        actions.style.gap = '8px';
 
         if (capture.analysis_status === 'pending' || capture.analysis_status === 'failed') {
+            const controlsRow = document.createElement('div');
+            controlsRow.className = 'calibration-controls-row';
+            controlsRow.style.display = 'flex';
+            controlsRow.style.gap = '8px';
+            controlsRow.style.alignItems = 'center';
+            controlsRow.style.flexWrap = 'wrap';
+
+            const refSelect = document.createElement('select');
+            refSelect.className = 'ref-object-select';
+            refSelect.style.padding = '4px 8px';
+            refSelect.style.fontSize = '12px';
+            refSelect.style.background = 'var(--bg-input)';
+            refSelect.style.border = '1px solid var(--border)';
+            refSelect.style.borderRadius = '4px';
+            refSelect.style.color = 'var(--text-primary)';
+
+            const opts = [
+                { value: 'plant_pot', text: 'Plant Pot (DB Default)' },
+                { value: 'soda_can', text: 'Soda Can (12.2cm × 6.6cm)' },
+                { value: 'aa_battery', text: 'AA Battery (5.0cm × 1.4cm)' },
+                { value: 'bic_lighter', text: 'Bic Lighter (8.0cm × 2.5cm)' },
+                { value: 'credit_card', text: 'Credit Card (5.4cm × 8.56cm)' },
+                { value: 'custom', text: 'Custom Dimension...' }
+            ];
+
+            opts.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.text;
+                refSelect.appendChild(opt);
+            });
+
+            const customInputs = document.createElement('div');
+            customInputs.style.display = 'none';
+            customInputs.style.gap = '8px';
+
+            const wInput = document.createElement('input');
+            wInput.type = 'number';
+            wInput.step = '0.1';
+            wInput.placeholder = 'Width (cm)';
+            wInput.style.width = '70px';
+            wInput.style.fontSize = '12px';
+            wInput.style.padding = '4px 6px';
+            wInput.style.background = 'var(--bg-input)';
+            wInput.style.border = '1px solid var(--border)';
+            wInput.style.borderRadius = '4px';
+            wInput.style.color = 'var(--text-primary)';
+            
+            const hInput = document.createElement('input');
+            hInput.type = 'number';
+            hInput.step = '0.1';
+            hInput.placeholder = 'Height (cm)';
+            hInput.style.width = '70px';
+            hInput.style.fontSize = '12px';
+            hInput.style.padding = '4px 6px';
+            hInput.style.background = 'var(--bg-input)';
+            hInput.style.border = '1px solid var(--border)';
+            hInput.style.borderRadius = '4px';
+            hInput.style.color = 'var(--text-primary)';
+
+            customInputs.appendChild(wInput);
+            customInputs.appendChild(hInput);
+
+            refSelect.addEventListener('change', () => {
+                if (refSelect.value === 'custom') {
+                    customInputs.style.display = 'flex';
+                } else {
+                    customInputs.style.display = 'none';
+                }
+            });
+
+            controlsRow.appendChild(refSelect);
+            controlsRow.appendChild(customInputs);
+
+            const buttonsRow = document.createElement('div');
+            buttonsRow.style.display = 'flex';
+            buttonsRow.style.gap = '8px';
+
             const analyzeBtn = document.createElement('button');
             analyzeBtn.className = 'btn btn-sm btn-primary';
-            analyzeBtn.textContent = '\ud83e\udde0 Analyze';
-            analyzeBtn.addEventListener('click', () => analyzeCapture(capture.id));
-            actions.appendChild(analyzeBtn);
+            analyzeBtn.textContent = '🧠 Analyze';
+            analyzeBtn.addEventListener('click', () => {
+                const refType = refSelect.value;
+                const refWidth = wInput.value;
+                const refHeight = hInput.value;
+                analyzeCapture(capture.id, {
+                    reference_type: refType,
+                    ref_width_cm: refWidth,
+                    ref_height_cm: refHeight
+                });
+            });
+            buttonsRow.appendChild(analyzeBtn);
+
+            actions.appendChild(controlsRow);
+            actions.appendChild(buttonsRow);
+        } else {
+            const buttonsRow = document.createElement('div');
+            buttonsRow.style.display = 'flex';
+            buttonsRow.style.gap = '8px';
+            actions.appendChild(buttonsRow);
         }
 
         if (capture.analysis_result) {
+            const buttonsRow = actions.querySelector('div') || actions;
             const viewBtn = document.createElement('button');
             viewBtn.className = 'btn btn-sm btn-secondary';
-            viewBtn.textContent = '\ud83d\udd0d Details';
+            viewBtn.textContent = '🔍 Details';
             viewBtn.addEventListener('click', () => viewCaptureDetails(capture));
-            actions.appendChild(viewBtn);
+            buttonsRow.appendChild(viewBtn);
         }
 
         card.appendChild(actions);
@@ -5154,15 +5376,17 @@ function renderCaptureGallery() {
     });
 }
 
-async function analyzeCapture(captureId) {
-    showToast('\ud83e\udde0 Analyzing image with AI...', 'info');
+async function analyzeCapture(captureId, options = {}) {
+    showToast('🧠 Analyzing image with AI...', 'info');
     try {
         const response = await fetch(`${API_BASE}/camera/captures/${captureId}/analyze`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
         });
         const data = await response.json();
         if (data.success) {
-            showToast('\u2705 Analysis complete!', 'success');
+            showToast('✅ Analysis complete!', 'success');
             await loadCameraCaptures();
         } else {
             showToast(`Analysis failed: ${data.error}`, 'error');
@@ -5193,7 +5417,10 @@ function viewCaptureDetails(capture) {
 
     showModal('\ud83e\udde0 Analysis Results', `
         <div class="analysis-detail">
-            <img src="${API_BASE}/camera/captures/${capture.id}/image${queryParams}" alt="Capture" class="analysis-preview-img">
+            <div class="analysis-image-wrapper" style="position: relative; width: 100%; display: inline-block; overflow: hidden; border-radius: var(--radius-md); margin-bottom: 20px;">
+                <img id="analysisDetailImg" src="${API_BASE}/camera/captures/${capture.id}/image${queryParams}" alt="Capture" style="width: 100%; display: block; border-radius: var(--radius-md);">
+                <canvas id="analysisDetailCanvas" style="position: absolute; top: 0; left: 0; pointer-events: none; width: 100%; height: 100%;"></canvas>
+            </div>
             <div class="analysis-grid">
                 <div class="analysis-item">
                     <span class="label">Species</span>
@@ -5231,6 +5458,81 @@ function viewCaptureDetails(capture) {
             ${recsHtml ? `<div class="analysis-section"><h4>Recommendations</h4>${recsHtml}</div>` : ''}
         </div>
     `);
+
+    // Draw the bounding boxes overlay
+    const img = document.getElementById('analysisDetailImg');
+    const canvas = document.getElementById('analysisDetailCanvas');
+    if (img && canvas) {
+        const drawBboxes = () => {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const refBbox = a.reference_bbox;
+            const plantBbox = a.plant_bbox;
+            const scaleX = canvas.width / 1000;
+            const scaleY = canvas.height / 1000;
+
+            ctx.font = `bold ${Math.max(14, Math.round(canvas.width * 0.018))}px sans-serif`;
+            ctx.lineWidth = Math.max(3, Math.round(canvas.width * 0.004));
+
+            // 1. Draw Reference Object (Blue)
+            if (refBbox && refBbox.length === 4) {
+                const ymin = refBbox[0] * scaleY;
+                const xmin = refBbox[1] * scaleX;
+                const ymax = refBbox[2] * scaleY;
+                const xmax = refBbox[3] * scaleX;
+                const w = xmax - xmin;
+                const h = ymax - ymin;
+
+                ctx.strokeStyle = '#2563eb';
+                ctx.strokeRect(xmin, ymin, w, h);
+                ctx.fillStyle = 'rgba(37, 99, 235, 0.15)';
+                ctx.fillRect(xmin, ymin, w, h);
+
+                ctx.fillStyle = '#2563eb';
+                const label = `Reference [${a.reference_object_detected || 'pot'}]`;
+                const textWidth = ctx.measureText(label).width;
+                const textHeight = Math.max(16, Math.round(canvas.width * 0.022));
+                ctx.fillRect(xmin, ymin - textHeight, textWidth + 10, textHeight);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(label, xmin + 5, ymin - (textHeight * 0.25));
+            }
+
+            // 2. Draw Plant (Green)
+            if (plantBbox && plantBbox.length === 4) {
+                const ymin = plantBbox[0] * scaleY;
+                const xmin = plantBbox[1] * scaleX;
+                const ymax = plantBbox[2] * scaleY;
+                const xmax = plantBbox[3] * scaleX;
+                const w = xmax - xmin;
+                const h = ymax - ymin;
+
+                ctx.strokeStyle = '#10b981';
+                ctx.strokeRect(xmin, ymin, w, h);
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+                ctx.fillRect(xmin, ymin, w, h);
+
+                ctx.fillStyle = '#10b981';
+                const heightCm = a.calculated_height_cm || a.estimated_height_cm;
+                const label = `Plant (${heightCm ? heightCm + ' cm' : 'height unclear'})`;
+                const textWidth = ctx.measureText(label).width;
+                const textHeight = Math.max(16, Math.round(canvas.width * 0.022));
+                ctx.fillRect(xmin, ymin - textHeight, textWidth + 10, textHeight);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(label, xmin + 5, ymin - (textHeight * 0.25));
+            }
+        };
+
+        if (img.complete) {
+            drawBboxes();
+        } else {
+            img.onload = drawBboxes;
+        }
+    }
 }
 
 async function loadCameraSchedules() {

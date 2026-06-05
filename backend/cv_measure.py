@@ -20,8 +20,15 @@ logger = logging.getLogger(__name__)
 # ── YOLO model singleton ─────────────────────────────────────────
 _yolo_model = None
 
+# ── Depth model singleton ────────────────────────────────────────
+_depth_model = None
+_depth_transform = None
+
 # Directory where captured images are stored (same as camera_service)
 CAPTURES_DIR = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+# Depth grid resolution (sent to frontend for client-side lookups)
+DEPTH_GRID_SIZE = 64
 
 # COCO class IDs useful for reference objects
 # 39 = bottle, 67 = cell phone, 73 = book, 76 = scissors
@@ -76,6 +83,115 @@ def _get_yolo_model():
         logger.error("Failed to load YOLO model: %s", exc)
         return None
 
+
+def _get_depth_model():
+    """Lazy-load the MiDaS DPT-Small depth model (singleton).
+
+    MiDaS small is ~25MB and gives good relative depth estimation.
+    Returns (model, transform) or (None, None) on failure.
+    """
+    global _depth_model, _depth_transform
+    if _depth_model is not None:
+        return _depth_model, _depth_transform
+
+    try:
+        import torch
+
+        model_dir = Path(__file__).parent / 'models'
+        hub_dir = model_dir / 'hub'
+        hub_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use local hub cache in the app's models directory
+        torch.hub.set_dir(str(hub_dir))
+
+        _depth_model = torch.hub.load(
+            'intel-isl/MiDaS', 'MiDaS_small',
+            source='github', trust_repo=True
+        )
+        _depth_model.eval()
+
+        midas_transforms = torch.hub.load(
+            'intel-isl/MiDaS', 'transforms',
+            source='github', trust_repo=True
+        )
+        _depth_transform = midas_transforms.small_transform
+
+        # Move to GPU if available (unlikely on NAS, but just in case)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        _depth_model.to(device)
+
+        logger.info("Loaded MiDaS DPT-Small depth model on %s", device)
+        return _depth_model, _depth_transform
+    except Exception as exc:
+        logger.error("Failed to load depth model: %s", exc)
+        _depth_model = None
+        _depth_transform = None
+        return None, None
+
+
+def compute_depth_grid(image, grid_size=None):
+    """Compute a downsampled relative depth grid from a BGR image.
+
+    Parameters:
+        image:     OpenCV BGR image (numpy array)
+        grid_size: Output grid resolution (default DEPTH_GRID_SIZE)
+
+    Returns:
+        A list-of-lists (grid_size × grid_size) of normalized depth
+        values in [0, 1], where 0 = closest and 1 = farthest.
+        Returns None if depth estimation fails.
+    """
+    import cv2
+    import numpy as np
+
+    if grid_size is None:
+        grid_size = DEPTH_GRID_SIZE
+
+    model, transform = _get_depth_model()
+    if model is None:
+        return None
+
+    try:
+        import torch
+
+        device = next(model.parameters()).device
+
+        # MiDaS expects RGB input
+        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        input_batch = transform(img_rgb).to(device)
+
+        with torch.no_grad():
+            prediction = model(input_batch)
+
+            # Resize to original image size
+            prediction = torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=image.shape[:2],
+                mode='bilinear',
+                align_corners=False,
+            ).squeeze()
+
+        depth_map = prediction.cpu().numpy()
+
+        # MiDaS outputs inverse depth (higher = closer).
+        # Normalize to 0-1 where 0 = closest, 1 = farthest.
+        d_min, d_max = depth_map.min(), depth_map.max()
+        if d_max - d_min > 1e-6:
+            # Invert so that closer = 0, farther = 1
+            depth_norm = 1.0 - (depth_map - d_min) / (d_max - d_min)
+        else:
+            depth_norm = np.zeros_like(depth_map)
+
+        # Downsample to grid_size × grid_size
+        depth_small = cv2.resize(depth_norm, (grid_size, grid_size),
+                                 interpolation=cv2.INTER_AREA)
+
+        # Round to 3 decimal places to keep JSON small
+        return [[round(float(v), 3) for v in row] for row in depth_small]
+
+    except Exception as exc:
+        logger.error("Depth estimation failed: %s", exc)
+        return None
 
 def _apply_transforms(image, rotation=0, hflip=False, vflip=False):
     """Apply rotation and flip transforms to a cv2 image (BGR)."""
@@ -573,6 +689,41 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
                 _, _, pw, ph = plant_bbox_px
                 result['estimated_height_cm'] = round(ph / px_per_cm, 1)
                 result['estimated_width_cm'] = round(pw / px_per_cm, 1)
+
+    # ── Compute depth grid for perspective correction ────────────
+    depth_grid = compute_depth_grid(image)
+    if depth_grid is not None:
+        result['depth_grid'] = depth_grid
+
+        # Also compute the average depth at the reference bbox
+        # so the frontend can calculate correction factors
+        grid_h = len(depth_grid)
+        grid_w = len(depth_grid[0]) if grid_h > 0 else 0
+        if grid_h > 0 and grid_w > 0:
+            # Map reference bbox to grid coords
+            gy1 = int(ymin_n / 1000 * grid_h)
+            gx1 = int(xmin_n / 1000 * grid_w)
+            gy2 = int(ymax_n / 1000 * grid_h)
+            gx2 = int(xmax_n / 1000 * grid_w)
+
+            # Clamp to grid bounds
+            gy1 = max(0, min(gy1, grid_h - 1))
+            gy2 = max(gy1 + 1, min(gy2, grid_h))
+            gx1 = max(0, min(gx1, grid_w - 1))
+            gx2 = max(gx1 + 1, min(gx2, grid_w))
+
+            # Average depth in reference region
+            ref_depths = []
+            for row in range(gy1, gy2):
+                for col in range(gx1, gx2):
+                    ref_depths.append(depth_grid[row][col])
+
+            if ref_depths:
+                result['ref_depth'] = round(sum(ref_depths) / len(ref_depths), 4)
+                logger.info("Reference depth: %.4f (avg over %d cells)",
+                            result['ref_depth'], len(ref_depths))
+    else:
+        logger.warning("Depth estimation unavailable — no perspective correction")
 
     result['success'] = True
     return result

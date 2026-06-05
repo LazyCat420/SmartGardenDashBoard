@@ -22,10 +22,10 @@ FROM python:3.11-slim AS runner
 WORKDIR /app
 
 # Install wget for healthcheck + fonts for QR label generation + SSH for Pi camera
-# + OpenCV runtime deps (Debian Bookworm package names)
+# + OpenCV runtime deps (Debian Bookworm package names) + git for torch.hub
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       wget fonts-dejavu-core openssh-client \
+       wget fonts-dejavu-core openssh-client git \
        libgl1 libglib2.0-0 libxcb1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,6 +50,17 @@ RUN mkdir -p ./backend/models \
     && python -c "from ultralytics import YOLO; m = YOLO('yolov8n.pt'); m.export(format='onnx', imgsz=640)" \
     && mv yolov8n.onnx ./backend/models/yolov8n.onnx \
     && rm -f yolov8n.pt || echo 'YOLO model pre-download skipped (will download at first run)'
+
+# ── Pre-download MiDaS depth model ───────────────────────────
+# MiDaS DPT-Small (~25MB) for monocular depth estimation.
+# torch.hub.load clones the repo, so git is needed.
+RUN mkdir -p ./backend/models/hub \
+    && python -c "\
+import torch; \
+torch.hub.set_dir('./backend/models/hub'); \
+model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', source='github', trust_repo=True); \
+print('MiDaS DPT-Small downloaded successfully')" \
+    || echo 'MiDaS model pre-download skipped (will download at first run)'
 
 # ── Copy frontend source ─────────────────────────────────────
 COPY frontend/ ./frontend/

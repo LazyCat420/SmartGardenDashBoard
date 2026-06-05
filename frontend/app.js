@@ -5753,7 +5753,9 @@ function viewMeasurementResults(captureId, data) {
     if (hasCalibration) {
         const hint = document.createElement('p');
         hint.style.cssText = 'margin-top:12px;font-size:0.85rem;color:var(--text-secondary);text-align:center;';
-        hint.textContent = '💡 Tip: Click and drag on the image to measure any other object.';
+        hint.textContent = data.depth_grid
+            ? "\ud83d\udca1 Tip: Click and drag to measure any object. Depth correction is active."
+            : "\ud83d\udca1 Tip: Click and drag to measure any object (no depth correction).";
         modalBody.appendChild(hint);
     }
 
@@ -5838,9 +5840,45 @@ function viewMeasurementResults(captureId, data) {
             ctx.fillRect(xmin, ymin, w_px, h_px);
             ctx.fillStyle = '#f97316';
             
-            const w_cm = (w_px / data.pixels_per_cm).toFixed(1);
-            const h_cm = (h_px / data.pixels_per_cm).toFixed(1);
-            const label = `Custom (${h_cm}cm H × ${w_cm}cm W)`;
+            // Calculate depth correction factor
+            let depthCorrection = 1.0;
+            let hasDepth = false;
+            if (data.depth_grid && data.ref_depth != null) {
+                const gridH = data.depth_grid.length;
+                const gridW = gridH > 0 ? data.depth_grid[0].length : 0;
+                if (gridH > 0 && gridW > 0) {
+                    // Map custom box to grid coordinates (using 0-1 fractional coords)
+                    const gx1 = Math.max(0, Math.min(gridW - 1, Math.floor(Math.min(customBox.x1, customBox.x2) * gridW)));
+                    const gy1 = Math.max(0, Math.min(gridH - 1, Math.floor(Math.min(customBox.y1, customBox.y2) * gridH)));
+                    const gx2 = Math.max(gx1 + 1, Math.min(gridW, Math.ceil(Math.max(customBox.x1, customBox.x2) * gridW)));
+                    const gy2 = Math.max(gy1 + 1, Math.min(gridH, Math.ceil(Math.max(customBox.y1, customBox.y2) * gridH)));
+
+                    // Average depth in target region
+                    let depthSum = 0;
+                    let depthCount = 0;
+                    for (let r = gy1; r < gy2; r++) {
+                        for (let c = gx1; c < gx2; c++) {
+                            depthSum += data.depth_grid[r][c];
+                            depthCount++;
+                        }
+                    }
+                    if (depthCount > 0) {
+                        const targetDepth = depthSum / depthCount;
+                        const refDepth = data.ref_depth;
+                        // Objects further away (higher depth) appear smaller,
+                        // so scale UP by target/ref ratio
+                        if (refDepth > 0.001) {
+                            depthCorrection = targetDepth / refDepth;
+                            hasDepth = true;
+                        }
+                    }
+                }
+            }
+
+            const w_cm = (w_px / data.pixels_per_cm * depthCorrection).toFixed(1);
+            const h_cm = (h_px / data.pixels_per_cm * depthCorrection).toFixed(1);
+            const depthTag = hasDepth ? ' \u2022 depth\u2713' : '';
+            const label = `Custom (${h_cm}cm H \u00d7 ${w_cm}cm W${depthTag})`;
             
             const tw = ctx.measureText(label).width;
             const th = Math.max(16, Math.round(canvas.width * 0.022));

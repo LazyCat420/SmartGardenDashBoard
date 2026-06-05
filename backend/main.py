@@ -1508,6 +1508,7 @@ def apply_actions():
 from backend.camera_service import test_connection as cam_test_connection
 from backend.camera_service import capture_image as cam_capture_image
 from backend.camera_service import analyze_image as cam_analyze_image
+from backend.cv_measure import measure_objects as cv_measure_objects
 
 
 @app.route('/api/camera/endpoints', methods=['GET'])
@@ -1821,6 +1822,69 @@ def analyze_capture(capture_id):
             'success': False,
             'error': result.get('error', 'Analysis failed')
         }), 500
+
+
+@app.route('/api/camera/captures/<int:capture_id>/measure', methods=['POST'])
+def measure_capture(capture_id):
+    """Run YOLO + OpenCV measurement only (no LLM call).
+
+    Quick measurement for testing — detects the reference object and
+    plant via computer vision, computes bounding boxes and cm dimensions.
+    """
+    capture = CameraCapture.query.get_or_404(capture_id)
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+    safe_filename = os.path.basename(capture.filename)
+    image_path = os.path.join(captures_dir, safe_filename)
+
+    req_data = request.json or {}
+    ref_type = req_data.get('reference_type')
+
+    ref_width_cm = None
+    ref_height_cm = None
+
+    if ref_type == 'soda_can':
+        ref_width_cm = 6.6
+        ref_height_cm = 12.2
+    elif ref_type == 'aa_battery':
+        ref_width_cm = 1.4
+        ref_height_cm = 5.0
+    elif ref_type == 'bic_lighter':
+        ref_width_cm = 2.5
+        ref_height_cm = 8.0
+    elif ref_type == 'credit_card':
+        ref_width_cm = 8.56
+        ref_height_cm = 5.4
+    elif ref_type == 'custom':
+        ref_width_cm = float(req_data.get('ref_width_cm')) if req_data.get('ref_width_cm') not in (None, '') else None
+        ref_height_cm = float(req_data.get('ref_height_cm')) if req_data.get('ref_height_cm') not in (None, '') else None
+    elif ref_type == 'plant_pot' or not ref_type:
+        # Try to get from DB if plant is linked
+        if capture.plant_id:
+            plant = Plant.query.get(capture.plant_id)
+            if plant:
+                ref_width_cm = plant.ref_width_cm
+                ref_height_cm = plant.ref_height_cm
+
+    endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+    rotation = endpoint.rotation if endpoint else 0
+    hflip = endpoint.hflip if endpoint else False
+    vflip = endpoint.vflip if endpoint else False
+
+    try:
+        result = cv_measure_objects(
+            image_path=image_path,
+            ref_type=ref_type,
+            ref_width_cm=ref_width_cm,
+            ref_height_cm=ref_height_cm,
+            rotation=rotation,
+            hflip=hflip,
+            vflip=vflip,
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    return jsonify(result)
 
 
 @app.route('/api/camera/schedules', methods=['GET'])

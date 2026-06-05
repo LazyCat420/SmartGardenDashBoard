@@ -5338,6 +5338,22 @@ function renderCaptureGallery() {
             buttonsRow.style.display = 'flex';
             buttonsRow.style.gap = '8px';
 
+            const measureBtn = document.createElement('button');
+            measureBtn.className = 'btn btn-sm btn-secondary';
+            measureBtn.textContent = '📏 Measure';
+            measureBtn.title = 'YOLO + OpenCV measurement only (no LLM)';
+            measureBtn.addEventListener('click', () => {
+                const refType = refSelect.value;
+                const refWidth = wInput.value;
+                const refHeight = hInput.value;
+                measureCapture(capture.id, {
+                    reference_type: refType,
+                    ref_width_cm: refWidth,
+                    ref_height_cm: refHeight
+                });
+            });
+            buttonsRow.appendChild(measureBtn);
+
             const analyzeBtn = document.createElement('button');
             analyzeBtn.className = 'btn btn-sm btn-primary';
             analyzeBtn.textContent = '🧠 Analyze';
@@ -5376,8 +5392,157 @@ function renderCaptureGallery() {
     });
 }
 
+async function measureCapture(captureId, options = {}) {
+    showToast('📏 Measuring with YOLO + OpenCV...', 'info');
+    try {
+        const response = await fetch(`${API_BASE}/camera/captures/${captureId}/measure`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(options)
+        });
+        const data = await response.json();
+        if (data.success) {
+            const method = data.detection_method || 'unknown';
+            const height = data.estimated_height_cm;
+            const width = data.estimated_width_cm;
+            let msg = '📏 Measurement complete!';
+            if (height || width) {
+                msg += ` Height: ${height || '?'}cm, Width: ${width || '?'}cm (via ${method})`;
+            } else {
+                msg += ' Bounding boxes detected but no reference for cm conversion.';
+            }
+            showToast(msg, 'success');
+            // Show results in a modal
+            viewMeasurementResults(captureId, data);
+        } else {
+            showToast('Measurement failed: ' + (data.error || 'No objects detected'), 'error');
+        }
+    } catch (error) {
+        showToast('Measurement request failed', 'error');
+    }
+}
+
+function viewMeasurementResults(captureId, data) {
+    const capture = cameraCaptures.find(c => c.id === captureId);
+    const ep = capture ? cameraEndpoints.find(e => e.id === capture.endpoint_id) : null;
+    const queryParams = ep ? `?r=${ep.rotation}&h=${ep.hflip ? 1 : 0}&v=${ep.vflip ? 1 : 0}` : '';
+
+    const modalBody = document.getElementById('modalBody');
+    const modalTitle = document.getElementById('modalTitle');
+    const overlay = document.getElementById('modalOverlay');
+    if (!modalBody || !modalTitle || !overlay) return;
+
+    modalTitle.textContent = '📏 Measurement Results';
+    modalBody.replaceChildren();
+
+    // Image + canvas wrapper
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:relative;width:100%;display:inline-block;overflow:hidden;border-radius:var(--radius-md);margin-bottom:20px;';
+
+    const img = document.createElement('img');
+    img.id = 'measureDetailImg';
+    img.src = `${API_BASE}/camera/captures/${captureId}/image${queryParams}`;
+    img.alt = 'Capture';
+    img.style.cssText = 'width:100%;display:block;border-radius:var(--radius-md);';
+    wrapper.appendChild(img);
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'measureDetailCanvas';
+    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;width:100%;height:100%;';
+    wrapper.appendChild(canvas);
+
+    modalBody.appendChild(wrapper);
+
+    // Info grid
+    const grid = document.createElement('div');
+    grid.className = 'analysis-grid';
+    const items = [
+        ['Method', data.detection_method || 'N/A'],
+        ['Height', data.estimated_height_cm ? data.estimated_height_cm + ' cm' : 'N/A'],
+        ['Width', data.estimated_width_cm ? data.estimated_width_cm + ' cm' : 'N/A'],
+        ['Pixels/cm', data.pixels_per_cm || 'N/A'],
+    ];
+    items.forEach(([label, value]) => {
+        const item = document.createElement('div');
+        item.className = 'analysis-item';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'label';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('span');
+        valueEl.className = 'value';
+        valueEl.textContent = value;
+        item.appendChild(labelEl);
+        item.appendChild(valueEl);
+        grid.appendChild(item);
+    });
+    modalBody.appendChild(grid);
+
+    overlay.classList.add('active');
+
+    // Draw bounding boxes
+    const drawBboxes = () => {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const scaleX = canvas.width / 1000;
+        const scaleY = canvas.height / 1000;
+
+        ctx.font = `bold ${Math.max(14, Math.round(canvas.width * 0.018))}px sans-serif`;
+        ctx.lineWidth = Math.max(3, Math.round(canvas.width * 0.004));
+
+        if (data.reference_bbox && data.reference_bbox.length === 4) {
+            const ymin = data.reference_bbox[0] * scaleY;
+            const xmin = data.reference_bbox[1] * scaleX;
+            const ymax = data.reference_bbox[2] * scaleY;
+            const xmax = data.reference_bbox[3] * scaleX;
+            const w = xmax - xmin;
+            const h = ymax - ymin;
+            ctx.strokeStyle = '#2563eb';
+            ctx.strokeRect(xmin, ymin, w, h);
+            ctx.fillStyle = 'rgba(37, 99, 235, 0.15)';
+            ctx.fillRect(xmin, ymin, w, h);
+            ctx.fillStyle = '#2563eb';
+            const label = `Reference [${data.detection_method || 'cv'}]`;
+            const tw = ctx.measureText(label).width;
+            const th = Math.max(16, Math.round(canvas.width * 0.022));
+            ctx.fillRect(xmin, ymin - th, tw + 10, th);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, xmin + 5, ymin - (th * 0.25));
+        }
+
+        if (data.plant_bbox && data.plant_bbox.length === 4) {
+            const ymin = data.plant_bbox[0] * scaleY;
+            const xmin = data.plant_bbox[1] * scaleX;
+            const ymax = data.plant_bbox[2] * scaleY;
+            const xmax = data.plant_bbox[3] * scaleX;
+            const w = xmax - xmin;
+            const h = ymax - ymin;
+            ctx.strokeStyle = '#10b981';
+            ctx.strokeRect(xmin, ymin, w, h);
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+            ctx.fillRect(xmin, ymin, w, h);
+            ctx.fillStyle = '#10b981';
+            const heightCm = data.estimated_height_cm;
+            const label = `Plant (${heightCm ? heightCm + ' cm' : 'height unclear'})`;
+            const tw = ctx.measureText(label).width;
+            const th = Math.max(16, Math.round(canvas.width * 0.022));
+            ctx.fillRect(xmin, ymin - th, tw + 10, th);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, xmin + 5, ymin - (th * 0.25));
+        }
+    };
+
+    if (img.complete) {
+        drawBboxes();
+    } else {
+        img.addEventListener('load', drawBboxes);
+    }
+}
+
 async function analyzeCapture(captureId, options = {}) {
-    showToast('🧠 Analyzing image with AI...', 'info');
+    showToast('🧠 Analyzing image with AI + CV...', 'info');
     try {
         const response = await fetch(`${API_BASE}/camera/captures/${captureId}/analyze`, {
             method: 'POST',
@@ -5386,7 +5551,8 @@ async function analyzeCapture(captureId, options = {}) {
         });
         const data = await response.json();
         if (data.success) {
-            showToast('✅ Analysis complete!', 'success');
+            const method = data.analysis?.detection_method;
+            showToast(`✅ Analysis complete!${method ? ' (measured via ' + method + ')' : ''}`, 'success');
             await loadCameraCaptures();
         } else {
             showToast(`Analysis failed: ${data.error}`, 'error');
@@ -5492,7 +5658,8 @@ function viewCaptureDetails(capture) {
                 ctx.fillRect(xmin, ymin, w, h);
 
                 ctx.fillStyle = '#2563eb';
-                const label = `Reference [${a.reference_object_detected || 'pot'}]`;
+                const methodLabel = a.detection_method ? ` via ${a.detection_method}` : '';
+                const label = `Reference [${a.reference_object_detected || 'pot'}${methodLabel}]`;
                 const textWidth = ctx.measureText(label).width;
                 const textHeight = Math.max(16, Math.round(canvas.width * 0.022));
                 ctx.fillRect(xmin, ymin - textHeight, textWidth + 10, textHeight);

@@ -223,17 +223,48 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
                   rotation=0, hflip=False, vflip=False,
                   ref_width_cm=None, ref_height_cm=None,
                   reference_type=None):
-    """Send a captured image to the vision LLM for plant analysis.
+    """Analyze a captured plant image using YOLO/OpenCV for measurement
+    and the Vision LLM for health/species analysis.
 
-    Returns dict with analysis results or error.
+    Phase 1 — Measurement (YOLO + OpenCV):
+        Detects the reference object and plant, computes bounding boxes
+        and real-world cm dimensions.
+
+    Phase 2 — Health Analysis (Vision LLM):
+        Sends the image to the LLM for species ID, health rating,
+        growth stage, pest detection, and care recommendations.
+        The LLM is NOT asked for bounding boxes or measurements.
+
+    Returns dict with 'success' and merged 'analysis' results.
     """
+
+    # ── Phase 1: YOLO + OpenCV Measurement ───────────────────────
+    measurement = {'success': False}
+    try:
+        from backend.cv_measure import measure_objects
+        measurement = measure_objects(
+            image_path=image_path,
+            ref_type=reference_type,
+            ref_width_cm=ref_width_cm,
+            ref_height_cm=ref_height_cm,
+            rotation=rotation,
+            hflip=hflip,
+            vflip=vflip,
+        )
+        logger.info("CV measurement result: success=%s method=%s height=%s width=%s",
+                     measurement.get('success'),
+                     measurement.get('detection_method'),
+                     measurement.get('estimated_height_cm'),
+                     measurement.get('estimated_width_cm'))
+    except Exception as exc:
+        logger.warning("CV measurement failed, continuing with LLM only: %s", exc)
+
+    # ── Phase 2: Vision LLM Health Analysis ──────────────────────
     prism_url, prism_project, prism_username = get_prism_settings()
 
     if not llm_url:
-        # Default to Prism chat completion endpoint
         llm_url = os.environ.get("LLM_SERVICE_URL") or f"{prism_url}/chat?stream=false"
     elif "/v1/chat/completions" in llm_url:
-        # Auto-convert standard OpenAI endpoint to Prism endpoint if it points to Prism port 7777
         if "7777" in llm_url:
             llm_url = llm_url.replace("/v1/chat/completions", "/chat?stream=false")
 
@@ -275,26 +306,13 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
 
     plant_context = '. '.join(context_parts) if context_parts else 'No prior plant information available.'
 
-    # Build calibration/reference context
-    calibration_context = []
-    if reference_type:
-        calibration_context.append(f"Reference object present in image: {reference_type}")
-    if ref_width_cm:
-        calibration_context.append(f"Reference object physical width: {ref_width_cm}cm")
-    if ref_height_cm:
-        calibration_context.append(f"Reference object physical height: {ref_height_cm}cm")
-        
-    calibration_str = '. '.join(calibration_context) if calibration_context else "No specific calibration reference object was declared, but look for a pot or standard household objects to estimate size."
-
+    # Simplified prompt — NO bounding box or measurement instructions.
+    # YOLO/OpenCV handles all spatial detection; the LLM focuses on
+    # what it is good at: understanding the plant.
     prompt = f"""Analyze this garden plant image. Return ONLY a valid JSON object with these fields:
 {{
   "plant_species": "identified species name or null if unclear",
   "confidence": 0.0 to 1.0,
-  "reference_object_detected": "soda_can|aa_battery|bic_lighter|credit_card|pot|custom|null",
-  "reference_bbox": [ymin, xmin, ymax, xmax],
-  "plant_bbox": [ymin, xmin, ymax, xmax],
-  "estimated_height_cm": number or null,
-  "estimated_width_cm": number or null,
   "health_rating": 1 to 10,
   "health_notes": "brief description of plant health",
   "pests_detected": [{{"type": "pest name", "severity": "mild|moderate|severe"}}],
@@ -302,17 +320,11 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
   "recommendations": ["list of care recommendations"]
 }}
 
-Calibration details:
-- {calibration_str}
-- The bboxes must be arrays of [ymin, xmin, ymax, xmax] in the range [0, 1000] relative to the image size.
-- "reference_bbox" must tightly bound the detected reference object (e.g. the pot or the soda can).
-- "plant_bbox" must tightly bound the entire plant (excluding the pot, starting from the soil line/rim of the pot to the top-most leaf).
-
 Plant context: {plant_context}
 
 Important: Return ONLY the JSON object, no markdown, no explanation."""
 
-    # Format payload for Prism /chat (using message-level images array)
+    # Format payload for Prism /chat
     payload = {
         'provider': 'vllm',
         'model': llm_model,
@@ -333,7 +345,6 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
         'username': prism_username
     }
 
-    # Set headers for Prism
     headers = {
         'Content-Type': 'application/json',
         'x-project': prism_project,
@@ -357,7 +368,8 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
         headers['Authorization'] = f'Bearer {api_key}'
 
     try:
-        logger.info(f"Sending image analysis request to {llm_url} for model {llm_model}...")
+        logger.info("Sending health analysis request to %s for model %s...",
+                     llm_url, llm_model)
         response = http_requests.post(
             llm_url,
             headers=headers,
@@ -371,70 +383,91 @@ Important: Return ONLY the JSON object, no markdown, no explanation."""
         response_data = data.get('response')
         if isinstance(response_data, dict):
             data = response_data
-        
+
         content = data.get('text') or data.get('content') or ''
         if not content and 'choices' in data:
-            # Fallback to OpenAI format if we called a direct endpoint
             content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
 
-        # Try to parse JSON from the response
-        # Strip markdown code fences if present
+        # Parse JSON from the response
         clean = content.strip()
         if clean.startswith('```'):
             lines = clean.split('\n')
-            # Remove first and last lines (fences)
             lines = [l for l in lines if not l.strip().startswith('```')]
             clean = '\n'.join(lines)
 
         analysis = json.loads(clean)
-        
-        # Calculate physical measurements if bounding boxes are returned
-        ref_bbox = analysis.get('reference_bbox')
-        plant_bbox = analysis.get('plant_bbox')
-        
-        if ref_bbox and len(ref_bbox) == 4 and plant_bbox and len(plant_bbox) == 4:
-            ref_h_px = abs(ref_bbox[2] - ref_bbox[0])
-            ref_w_px = abs(ref_bbox[3] - ref_bbox[1])
-            
-            plant_h_px = abs(plant_bbox[2] - plant_bbox[0])
-            plant_w_px = abs(plant_bbox[3] - plant_bbox[1])
-            
-            calibrated_h = None
-            calibrated_w = None
-            
-            if ref_height_cm and ref_h_px > 0:
-                scale_h = ref_h_px / ref_height_cm
-                calibrated_h = round(plant_h_px / scale_h, 1)
-                analysis['pixels_per_cm_h'] = round(scale_h, 3)
-                
-            if ref_width_cm and ref_w_px > 0:
-                scale_w = ref_w_px / ref_width_cm
-                calibrated_w = round(plant_w_px / scale_w, 1)
-                analysis['pixels_per_cm_w'] = round(scale_w, 3)
-                
-            if calibrated_h is not None:
-                analysis['calculated_height_cm'] = calibrated_h
-                # Set or override estimated height
-                analysis['estimated_height_cm'] = calibrated_h
-                
-            if calibrated_w is not None:
-                analysis['calculated_width_cm'] = calibrated_w
-                # Set or override estimated width
-                analysis['estimated_width_cm'] = calibrated_w
-        
-        return {'success': True, 'analysis': analysis}
 
     except json.JSONDecodeError:
         logger.warning('Vision LLM returned non-JSON response: %s', content[:200])
-        return {
-            'success': False,
-            'error': 'Vision model returned non-JSON response',
-            'raw_response': content[:500]
-        }
+        # If LLM fails but we have measurement data, return measurement-only
+        if measurement.get('success'):
+            analysis = {
+                'plant_species': None,
+                'confidence': None,
+                'health_rating': None,
+                'health_notes': 'LLM analysis failed — measurement data only',
+                'pests_detected': [],
+                'growth_stage': None,
+                'recommendations': [],
+            }
+        else:
+            return {
+                'success': False,
+                'error': 'Vision model returned non-JSON response',
+                'raw_response': content[:500]
+            }
     except http_requests.exceptions.Timeout:
-        return {'success': False, 'error': f'Vision analysis timed out (120s) at {llm_url}'}
+        if measurement.get('success'):
+            analysis = {
+                'plant_species': None, 'confidence': None,
+                'health_rating': None,
+                'health_notes': 'LLM timed out — measurement data only',
+                'pests_detected': [], 'growth_stage': None,
+                'recommendations': [],
+            }
+        else:
+            return {'success': False, 'error': f'Vision analysis timed out (120s) at {llm_url}'}
     except http_requests.exceptions.ConnectionError:
-        return {'success': False, 'error': f'Cannot connect to LLM service at {llm_url}'}
+        if measurement.get('success'):
+            analysis = {
+                'plant_species': None, 'confidence': None,
+                'health_rating': None,
+                'health_notes': 'Cannot connect to LLM — measurement data only',
+                'pests_detected': [], 'growth_stage': None,
+                'recommendations': [],
+            }
+        else:
+            return {'success': False, 'error': f'Cannot connect to LLM service at {llm_url}'}
     except Exception as e:
-        return {'success': False, 'error': str(e)}
+        if measurement.get('success'):
+            analysis = {
+                'plant_species': None, 'confidence': None,
+                'health_rating': None,
+                'health_notes': f'LLM error: {e} — measurement data only',
+                'pests_detected': [], 'growth_stage': None,
+                'recommendations': [],
+            }
+        else:
+            return {'success': False, 'error': str(e)}
+
+    # ── Merge measurement results into analysis ──────────────────
+    if measurement.get('success'):
+        analysis['reference_bbox'] = measurement.get('reference_bbox')
+        analysis['plant_bbox'] = measurement.get('plant_bbox')
+        analysis['estimated_height_cm'] = measurement.get('estimated_height_cm')
+        analysis['estimated_width_cm'] = measurement.get('estimated_width_cm')
+        analysis['calculated_height_cm'] = measurement.get('estimated_height_cm')
+        analysis['calculated_width_cm'] = measurement.get('estimated_width_cm')
+        analysis['pixels_per_cm'] = measurement.get('pixels_per_cm')
+        analysis['detection_method'] = measurement.get('detection_method')
+        analysis['reference_object_detected'] = reference_type
+    else:
+        # No CV measurement — set empty values so frontend doesn't break
+        analysis.setdefault('reference_bbox', None)
+        analysis.setdefault('plant_bbox', None)
+        analysis.setdefault('estimated_height_cm', None)
+        analysis.setdefault('estimated_width_cm', None)
+        analysis.setdefault('detection_method', None)
+
+    return {'success': True, 'analysis': analysis}
 

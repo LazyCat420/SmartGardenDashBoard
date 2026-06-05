@@ -62,27 +62,31 @@ def test_connection(ssh_host, ssh_user='pi', ssh_port=22):
 
 
 def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
-                  capture_command='rpicam-still -o - --width 1920 --height 1080 -t 1000',
+                  capture_command='~/tof_env/bin/python ~/capture_rgbd.py',
                   endpoint_id=None):
     """Capture an image from a Pi camera via SSH.
 
-    The capture_command must output the image to stdout (using -o -).
-    Returns dict with 'success', 'image_path', 'filename', and 'message'.
+    Runs the capture_rgbd.py script on the Pi to generate image.jpg and depth.npy,
+    then copies both files back to the NAS.
+    Returns dict with 'success', 'image_path', 'depth_path', 'filename', and 'message'.
     """
     ensure_captures_dir()
 
     # Generate a unique filename using UUID to prevent path traversal
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
     unique_id = uuid.uuid4().hex[:8]
-    filename = f'{timestamp}_{endpoint_id or "unknown"}_{unique_id}.jpg'
-    image_path = os.path.join(CAPTURES_DIR, filename)
+    filename = f'{timestamp}_{endpoint_id or "unknown"}_{unique_id}'
+    image_path = os.path.join(CAPTURES_DIR, f"{filename}.jpg")
+    depth_path = os.path.join(CAPTURES_DIR, f"{filename}_depth.npy")
 
     # Validate the resolved path stays within CAPTURES_DIR
-    resolved = os.path.realpath(image_path)
-    if not resolved.startswith(os.path.realpath(CAPTURES_DIR) + os.sep):
+    resolved_img = os.path.realpath(image_path)
+    resolved_depth = os.path.realpath(depth_path)
+    cap_dir_real = os.path.realpath(CAPTURES_DIR) + os.sep
+    if not resolved_img.startswith(cap_dir_real) or not resolved_depth.startswith(cap_dir_real):
         return {'success': False, 'message': 'Invalid capture path'}
 
-    cmd = [
+    cmd_trigger = [
         'ssh',
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'ConnectTimeout=10',
@@ -93,11 +97,8 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
     ]
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=30
-        )
+        # Trigger the dual capture script on the Pi
+        result = subprocess.run(cmd_trigger, capture_output=True, timeout=45)
 
         if result.returncode != 0:
             stderr_text = result.stderr.decode('utf-8', errors='replace').strip()
@@ -106,35 +107,46 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
                 'message': f'Capture failed (exit {result.returncode}): {stderr_text}'
             }
 
-        if not result.stdout or len(result.stdout) < 100:
-            return {
-                'success': False,
-                'message': 'Capture returned empty or too-small image data'
-            }
+        # Copy the image.jpg file back
+        cmd_scp_img = [
+            'scp',
+            '-o', 'StrictHostKeyChecking=no',
+            '-P', str(ssh_port),
+            f'{ssh_user}@{ssh_host}:~/image.jpg',
+            resolved_img
+        ]
+        subprocess.run(cmd_scp_img, check=True)
 
-        # Validate the image looks like a JPEG (magic bytes check)
-        if not result.stdout[:2] == b'\xff\xd8':
-            return {
-                'success': False,
-                'message': 'Captured data does not appear to be a valid JPEG image'
-            }
+        # Copy the depth.npy file back
+        cmd_scp_depth = [
+            'scp',
+            '-o', 'StrictHostKeyChecking=no',
+            '-P', str(ssh_port),
+            f'{ssh_user}@{ssh_host}:~/depth.npy',
+            resolved_depth
+        ]
+        try:
+            subprocess.run(cmd_scp_depth, check=True)
+            has_depth = True
+        except subprocess.CalledProcessError:
+            has_depth = False
+            logger.warning("depth.npy not found on Pi, proceeding without ToF depth.")
 
-        # Write the image to disk
-        with open(resolved, 'wb') as f:
-            f.write(result.stdout)
-
-        logger.info('Captured image: %s (%d bytes)', filename, len(result.stdout))
+        # Read size for logging
+        size_bytes = os.path.getsize(resolved_img)
+        logger.info('Captured image: %s.jpg (%d bytes)', filename, size_bytes)
 
         return {
             'success': True,
-            'image_path': resolved,
+            'image_path': resolved_img,
+            'depth_path': resolved_depth if has_depth else None,
             'filename': filename,
-            'size_bytes': len(result.stdout),
-            'message': f'Captured {len(result.stdout)} bytes'
+            'size_bytes': size_bytes,
+            'message': f'Captured {size_bytes} bytes'
         }
 
     except subprocess.TimeoutExpired:
-        return {'success': False, 'message': 'Capture timed out after 30s'}
+        return {'success': False, 'message': 'Capture timed out after 45s'}
     except Exception as e:
         return {'success': False, 'message': str(e)}
 
@@ -222,13 +234,13 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
                   last_height=None, llm_url=None, llm_model=None,
                   rotation=0, hflip=False, vflip=False,
                   ref_width_cm=None, ref_height_cm=None,
-                  reference_type=None):
+                  reference_type=None, depth_path=None):
     """Analyze a captured plant image using YOLO/OpenCV for measurement
     and the Vision LLM for health/species analysis.
 
-    Phase 1 — Measurement (YOLO + OpenCV):
+    Phase 1 — Measurement (YOLO + OpenCV + ToF Depth):
         Detects the reference object and plant, computes bounding boxes
-        and real-world cm dimensions.
+        and real-world cm dimensions using physical ToF laser distance.
 
     Phase 2 — Health Analysis (Vision LLM):
         Sends the image to the LLM for species ID, health rating,
@@ -238,7 +250,7 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
     Returns dict with 'success' and merged 'analysis' results.
     """
 
-    # ── Phase 1: YOLO + OpenCV Measurement ───────────────────────
+    # ── Phase 1: YOLO + OpenCV + ToF Measurement ───────────────────────
     measurement = {'success': False}
     try:
         from backend.cv_measure import measure_objects
@@ -250,6 +262,7 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
             rotation=rotation,
             hflip=hflip,
             vflip=vflip,
+            depth_path=depth_path
         )
         logger.info("CV measurement result: success=%s method=%s height=%s width=%s",
                      measurement.get('success'),

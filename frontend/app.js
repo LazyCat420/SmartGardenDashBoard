@@ -5356,8 +5356,8 @@ function renderCaptureGallery() {
 
             const calibrateBtn = document.createElement('button');
             calibrateBtn.className = 'btn btn-sm btn-warning';
-            calibrateBtn.textContent = '📐 Calibrate';
-            calibrateBtn.title = 'Draw a box around the reference object';
+            calibrateBtn.textContent = '📐 Measure';
+            calibrateBtn.title = 'Draw a box around the object to measure';
             calibrateBtn.addEventListener('click', () => {
                 const refType = refSelect.value;
                 const refWidth = wInput.value;
@@ -5453,13 +5453,13 @@ function openCalibrateModal(captureId, options = {}) {
     const refLabel = options.reference_type
         ? options.reference_type.replace(/_/g, ' ')
         : 'reference object';
-    modalTitle.textContent = `📐 Draw box around the ${refLabel}`;
+    modalTitle.textContent = `📐 Draw box to measure object`;
     modalBody.replaceChildren();
 
     // Instructions
     const instructions = document.createElement('p');
     instructions.style.cssText = 'color:var(--text-secondary);margin-bottom:12px;font-size:0.9rem;';
-    instructions.textContent = 'Click and drag on the image to draw a rectangle around the reference object. Then click Calibrate.';
+    instructions.textContent = 'Click and drag on the image to draw a rectangle around any object. The ToF laser depth will be used to calculate its physical size. Then click Measure.';
     modalBody.appendChild(instructions);
 
     // Image + drawing canvas wrapper
@@ -5507,7 +5507,7 @@ function openCalibrateModal(captureId, options = {}) {
 
     const calibBtn = document.createElement('button');
     calibBtn.className = 'btn btn-sm btn-warning';
-    calibBtn.textContent = '📐 Calibrate';
+    calibBtn.textContent = '📐 Measure';
     calibBtn.disabled = true;
     calibBtn.addEventListener('click', () => {
         if (!drawnBox) return;

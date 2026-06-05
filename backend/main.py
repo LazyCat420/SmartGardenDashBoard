@@ -1663,7 +1663,7 @@ def get_capture_image(capture_id):
 
     # Security: use only the basename to prevent path traversal
     safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename)
+    image_path = os.path.join(captures_dir, safe_filename + ".jpg")
 
     # Validate resolved path stays within captures directory
     resolved = os.path.realpath(image_path)
@@ -1708,7 +1708,8 @@ def analyze_capture(capture_id):
     captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
 
     safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename)
+    image_path = os.path.join(captures_dir, safe_filename + ".jpg")
+    depth_path = os.path.join(captures_dir, safe_filename + "_depth.npy")
 
     # Get plant context if linked
     plant_name = None
@@ -1773,7 +1774,8 @@ def analyze_capture(capture_id):
         vflip=vflip,
         ref_width_cm=ref_width_cm,
         ref_height_cm=ref_height_cm,
-        reference_type=ref_type or ('plant_pot' if (db_ref_width_cm or db_ref_height_cm) else None)
+        reference_type=ref_type or ('plant_pot' if (db_ref_width_cm or db_ref_height_cm) else None),
+        depth_path=depth_path
     )
 
     if result['success']:

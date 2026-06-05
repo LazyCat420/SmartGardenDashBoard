@@ -92,7 +92,8 @@ def run_pending_schedules():
         # 3. Trigger vision analysis
         captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
         safe_filename = os.path.basename(capture.filename)
-        image_path = os.path.join(captures_dir, safe_filename)
+        image_path = os.path.join(captures_dir, safe_filename + ".jpg")
+        depth_path = os.path.join(captures_dir, safe_filename + "_depth.npy")
 
         capture.analysis_status = 'analyzing'
         db.session.commit()
@@ -104,7 +105,8 @@ def run_pending_schedules():
             last_height=last_height,
             rotation=endpoint.rotation if endpoint else 0,
             hflip=endpoint.hflip if endpoint else False,
-            vflip=endpoint.vflip if endpoint else False
+            vflip=endpoint.vflip if endpoint else False,
+            depth_path=depth_path
         )
 
         if analysis_result['success']:

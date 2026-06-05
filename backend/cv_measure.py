@@ -84,114 +84,93 @@ def _get_yolo_model():
         return None
 
 
-def _get_depth_model():
-    """Lazy-load the MiDaS DPT-Small depth model (singleton).
+# ── ToF Depth Loader ─────────────────────────────────────────────
 
-    MiDaS small is ~25MB and gives good relative depth estimation.
-    Returns (model, transform) or (None, None) on failure.
+def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
     """
-    global _depth_model, _depth_transform
-    if _depth_model is not None:
-        return _depth_model, _depth_transform
-
-    try:
-        import torch
-
-        model_dir = Path(__file__).parent / 'models'
-        hub_dir = model_dir / 'hub'
-        hub_dir.mkdir(parents=True, exist_ok=True)
-
-        # Use local hub cache in the app's models directory
-        torch.hub.set_dir(str(hub_dir))
-
-        _depth_model = torch.hub.load(
-            'intel-isl/MiDaS', 'MiDaS_small',
-            source='github', trust_repo=True
-        )
-        _depth_model.eval()
-
-        midas_transforms = torch.hub.load(
-            'intel-isl/MiDaS', 'transforms',
-            source='github', trust_repo=True
-        )
-        _depth_transform = midas_transforms.small_transform
-
-        # Move to GPU if available (unlikely on NAS, but just in case)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        _depth_model.to(device)
-
-        logger.info("Loaded MiDaS DPT-Small depth model on %s", device)
-        return _depth_model, _depth_transform
-    except Exception as exc:
-        logger.error("Failed to load depth model: %s", exc)
-        _depth_model = None
-        _depth_transform = None
-        return None, None
-
-
-def compute_depth_grid(image, grid_size=None):
-    """Compute a downsampled relative depth grid from a BGR image.
-
-    Parameters:
-        image:     OpenCV BGR image (numpy array)
-        grid_size: Output grid resolution (default DEPTH_GRID_SIZE)
-
+    Load physical ToF depth map in millimeters.
+    
+    Reads the depth.npy array, scales it to match the RGB image size,
+    and returns it as a numpy array in millimeters.
+    
     Returns:
-        A list-of-lists (grid_size × grid_size) of normalized depth
-        values in [0, 1], where 0 = closest and 1 = farthest.
-        Returns None if depth estimation fails.
+        numpy.ndarray of depth in millimeters, sized to target_shape
+        or None if loading fails.
     """
+    import numpy as np
+    import cv2
+    
+    if not depth_path or not os.path.exists(depth_path):
+        return None
+        
+    try:
+        depth_buf = np.load(depth_path)
+        # ToF array is usually 240x180. Resize to match RGB (1920x1080)
+        # INTER_NEAREST to avoid interpolating invalid edge depths,
+        # but INTER_LINEAR gives smoother depth maps for bounding boxes.
+        depth_resized = cv2.resize(depth_buf, (target_shape[1], target_shape[0]), 
+                                   interpolation=cv2.INTER_LINEAR)
+        return depth_resized
+    except Exception as exc:
+        logger.error("Failed to load ToF depth map: %s", exc)
+        return None
+
+def calculate_physical_size(px_width, px_height, distance_mm, img_width=1920, img_height=1080):
+    """
+    Calculate physical size using pinhole camera trigonometry and laser distance.
+    Assumes Raspberry Pi Camera Module 3 Wide (IMX708).
+    HFOV = 102 degrees, VFOV = 67 degrees.
+    """
+    import math
+    
+    if distance_mm <= 0:
+        return None, None
+        
+    # FOV in radians
+    hfov_rad = math.radians(102.0)
+    vfov_rad = math.radians(67.0)
+    
+    # Distance in cm
+    dist_cm = distance_mm / 10.0
+    
+    # Physical width and height of the entire frame at this distance
+    frame_width_cm = 2.0 * dist_cm * math.tan(hfov_rad / 2.0)
+    frame_height_cm = 2.0 * dist_cm * math.tan(vfov_rad / 2.0)
+    
+    # Proportion of the object in the frame
+    obj_width_cm = frame_width_cm * (px_width / float(img_width))
+    obj_height_cm = frame_height_cm * (px_height / float(img_height))
+    
+    return round(obj_width_cm, 1), round(obj_height_cm, 1)
+
+def generate_tof_depth_grid(tof_depth, grid_size=64):
+    """Downsample and normalize ToF depth to 0-1 for the UI heatmap."""
     import cv2
     import numpy as np
-
-    if grid_size is None:
-        grid_size = DEPTH_GRID_SIZE
-
-    model, transform = _get_depth_model()
-    if model is None:
+    
+    if tof_depth is None:
         return None
-
-    try:
-        import torch
-
-        device = next(model.parameters()).device
-
-        # MiDaS expects RGB input
-        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        input_batch = transform(img_rgb).to(device)
-
-        with torch.no_grad():
-            prediction = model(input_batch)
-
-            # Resize to original image size
-            prediction = torch.nn.functional.interpolate(
-                prediction.unsqueeze(1),
-                size=image.shape[:2],
-                mode='bilinear',
-                align_corners=False,
-            ).squeeze()
-
-        depth_map = prediction.cpu().numpy()
-
-        # MiDaS outputs inverse depth (higher = closer).
-        # Normalize to 0-1 where 0 = closest, 1 = farthest.
-        d_min, d_max = depth_map.min(), depth_map.max()
-        if d_max - d_min > 1e-6:
-            # Invert so that closer = 0, farther = 1
-            depth_norm = 1.0 - (depth_map - d_min) / (d_max - d_min)
-        else:
-            depth_norm = np.zeros_like(depth_map)
-
-        # Downsample to grid_size × grid_size
-        depth_small = cv2.resize(depth_norm, (grid_size, grid_size),
-                                 interpolation=cv2.INTER_AREA)
-
-        # Round to 3 decimal places to keep JSON small
-        return [[round(float(v), 3) for v in row] for row in depth_small]
-
-    except Exception as exc:
-        logger.error("Depth estimation failed: %s", exc)
-        return None
+        
+    depth_small = cv2.resize(tof_depth, (grid_size, grid_size), interpolation=cv2.INTER_AREA)
+    
+    # Ignore 0 values (invalid) and extreme outliers (>6000mm)
+    valid_mask = (depth_small > 0) & (depth_small < 6000)
+    if not np.any(valid_mask):
+        return [[0.5] * grid_size for _ in range(grid_size)]
+        
+    d_min = depth_small[valid_mask].min()
+    d_max = depth_small[valid_mask].max()
+    
+    # Normalize to 0-1 (closer = 0, farther = 1)
+    if d_max > d_min:
+        depth_norm = (depth_small - d_min) / (d_max - d_min)
+    else:
+        depth_norm = np.zeros_like(depth_small)
+        
+    # Cap invalid pixels to max distance
+    depth_norm[~valid_mask] = 1.0
+    
+    return [[round(float(v), 3) for v in row] for row in depth_norm]
 
 def _apply_transforms(image, rotation=0, hflip=False, vflip=False):
     """Apply rotation and flip transforms to a cv2 image (BGR)."""
@@ -478,18 +457,20 @@ def detect_plant_contour(image, exclude_bbox=None):
 
 def measure_objects(image_path, ref_type=None,
                     ref_width_cm=None, ref_height_cm=None,
-                    rotation=0, hflip=False, vflip=False):
+                    rotation=0, hflip=False, vflip=False,
+                    depth_path=None):
     """
-    Detect reference object and plant, then compute real-world measurements.
+    Detect plant, and compute real-world measurements using ToF data.
 
     Parameters:
         image_path:    Path to the captured image file
-        ref_type:      Type of reference object ('soda_can', 'aa_battery', etc.)
+        ref_type:      Type of reference object (Legacy, mostly ignored if ToF is used)
         ref_width_cm:  Known width of reference object in cm (overrides default)
         ref_height_cm: Known height of reference object in cm (overrides default)
         rotation:      Image rotation (0, 90, 180, 270)
         hflip:         Horizontal flip
         vflip:         Vertical flip
+        depth_path:    Path to the ToF depth map (.npy)
 
     Returns:
         dict with keys:
@@ -499,7 +480,7 @@ def measure_objects(image_path, ref_type=None,
             estimated_height_cm: float or None
             estimated_width_cm:  float or None
             pixels_per_cm:      float or None
-            detection_method:   'yolo' | 'opencv_contour' | None
+            detection_method:   'tof_physical' | 'yolo' | 'opencv_contour' | None
             error:              str if success is False
     """
     result = {
@@ -560,36 +541,64 @@ def measure_objects(image_path, ref_type=None,
         ]
 
     # ── Step 4: Calculate real-world dimensions ──────────────────
-    # Use defaults from KNOWN_DIMENSIONS if not explicitly provided
-    if ref_type and ref_type in KNOWN_DIMENSIONS:
-        if ref_height_cm is None:
-            ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
-        if ref_width_cm is None:
-            ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
+    
+    # Load ToF depth map
+    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+    
+    # ── ToF Math Strategy ──────────────────────────────────────────
+    if tof_depth is not None and plant_bbox_px:
+        # Use physical ToF distance mapping!
+        px, py, pw, ph = plant_bbox_px
+        
+        # Sample the center of the plant bounding box
+        cx = min(px + pw // 2, w_img - 1)
+        cy = min(py + ph // 2, h_img - 1)
+        
+        # Get distance in mm
+        distance_mm = tof_depth[cy, cx]
+        logger.info("ToF distance at plant center (%d, %d): %.1f mm", cx, cy, distance_mm)
+        
+        if distance_mm > 0 and distance_mm < 6000:  # Ignore extreme outliers (>6m)
+            w_cm, h_cm = calculate_physical_size(pw, ph, distance_mm, img_width=w_img, img_height=h_img)
+            result['estimated_height_cm'] = h_cm
+            result['estimated_width_cm'] = w_cm
+            result['detection_method'] = 'tof_physical'
+            
+    # ── Legacy Reference Object Scaling Strategy ────────────────────
+    if result['detection_method'] != 'tof_physical' and ref_bbox_px:
+        # Use defaults from KNOWN_DIMENSIONS if not explicitly provided
+        if ref_type and ref_type in KNOWN_DIMENSIONS:
+            if ref_height_cm is None:
+                ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
+            if ref_width_cm is None:
+                ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
 
-    if ref_bbox_px and (ref_height_cm or ref_width_cm):
-        _, _, rw, rh = ref_bbox_px
+        if ref_height_cm or ref_width_cm:
+            _, _, rw, rh = ref_bbox_px
 
-        # Match longer bbox dimension to longer reference dimension
-        ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
-        ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
-        bbox_long = max(rw, rh)
-        bbox_short = min(rw, rh)
+            # Match longer bbox dimension to longer reference dimension
+            ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
+            ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
+            bbox_long = max(rw, rh)
+            bbox_short = min(rw, rh)
 
-        if ref_long > 0 and bbox_long > 0:
-            px_per_cm_h = bbox_long / ref_long
-        elif ref_short > 0 and bbox_short > 0:
-            px_per_cm_h = bbox_short / ref_short
-        else:
-            px_per_cm_h = None
+            if ref_long > 0 and bbox_long > 0:
+                px_per_cm_h = bbox_long / ref_long
+            elif ref_short > 0 and bbox_short > 0:
+                px_per_cm_h = bbox_short / ref_short
+            else:
+                px_per_cm_h = None
 
-        if px_per_cm_h and px_per_cm_h > 0:
-            result['pixels_per_cm'] = round(px_per_cm_h, 2)
+            if px_per_cm_h and px_per_cm_h > 0:
+                result['pixels_per_cm'] = round(px_per_cm_h, 2)
 
-            if plant_bbox_px:
-                _, _, pw, ph = plant_bbox_px
-                result['estimated_height_cm'] = round(ph / px_per_cm_h, 1)
-                result['estimated_width_cm'] = round(pw / px_per_cm_h, 1)
+                if plant_bbox_px:
+                    _, _, pw, ph = plant_bbox_px
+                    result['estimated_height_cm'] = round(ph / px_per_cm_h, 1)
+                    result['estimated_width_cm'] = round(pw / px_per_cm_h, 1)
+
+    if tof_depth is not None:
+        result['depth_grid'] = generate_tof_depth_grid(tof_depth)
 
     result['success'] = True
     return result
@@ -597,23 +606,24 @@ def measure_objects(image_path, ref_type=None,
 
 def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
                               ref_width_cm=None, ref_height_cm=None,
-                              rotation=0, hflip=False, vflip=False):
+                              rotation=0, hflip=False, vflip=False,
+                              depth_path=None):
     """
-    Measure using a manually-drawn reference bounding box.
+    Measure using a manually-drawn bounding box (acting as the target object).
 
-    The user draws a box around the reference object in the UI.
-    We skip auto-detection and use their bbox directly, then
-    auto-detect the plant via green segmentation.
+    With ToF enabled, the user can just draw a box around ANYTHING, 
+    and we will instantly calculate its physical size without any reference battery!
 
     Parameters:
         image_path:    Path to the captured image file
         ref_bbox_norm: [ymin, xmin, ymax, xmax] in 0-1000 normalized scale
-        ref_type:      Type of reference object for known dimensions lookup
-        ref_width_cm:  Known width in cm (overrides lookup)
-        ref_height_cm: Known height in cm (overrides lookup)
+        ref_type:      Legacy reference type
+        ref_width_cm:  Legacy known width
+        ref_height_cm: Legacy known height
         rotation:      Image rotation (0, 90, 180, 270)
         hflip:         Horizontal flip
         vflip:         Vertical flip
+        depth_path:    Path to the ToF depth map (.npy)
 
     Returns: dict with measurement results.
     """
@@ -659,59 +669,62 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
             int((px + pw) / w_img * 1000),
         ]
 
-    # ── Calculate real-world dimensions ──────────────────────────
-    if ref_type and ref_type in KNOWN_DIMENSIONS:
-        if ref_height_cm is None:
-            ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
-        if ref_width_cm is None:
-            ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
+    # ── ToF Math Strategy ──────────────────────────
+    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+    
+    if tof_depth is not None:
+        # User drew a box, and we have ToF. Treat the box as the object to measure!
+        cx = rx + rw // 2
+        cy = ry + rh // 2
+        
+        # Prevent out of bounds
+        cx = min(cx, w_img - 1)
+        cy = min(cy, h_img - 1)
+        
+        distance_mm = tof_depth[cy, cx]
+        logger.info("ToF manual box center (%d, %d): %.1f mm", cx, cy, distance_mm)
+        
+        if distance_mm > 0 and distance_mm < 6000:
+            w_cm, h_cm = calculate_physical_size(rw, rh, distance_mm, img_width=w_img, img_height=h_img)
+            result['estimated_height_cm'] = h_cm
+            result['estimated_width_cm'] = w_cm
+            result['detection_method'] = 'tof_physical'
+            
+            # Since the user explicitly drew a box to measure, we can set the plant_bbox
+            # equal to the reference_bbox so the frontend draws it properly.
+            result['plant_bbox'] = ref_bbox_norm
 
-    if (ref_height_cm or ref_width_cm) and rw > 0 and rh > 0:
-        # Match longer bbox dimension to longer reference dimension,
-        # shorter to shorter.  This handles any orientation.
-        ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
-        ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
-        bbox_long = max(rw, rh)
-        bbox_short = min(rw, rh)
+    # ── Legacy Scaling Strategy (if ToF is missing) ────────────
+    if result['detection_method'] != 'tof_physical':
+        if ref_type and ref_type in KNOWN_DIMENSIONS:
+            if ref_height_cm is None:
+                ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
+            if ref_width_cm is None:
+                ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
 
-        # Use the longer dimension for better accuracy (more pixels)
-        if ref_long > 0 and bbox_long > 0:
-            px_per_cm = bbox_long / ref_long
-        elif ref_short > 0 and bbox_short > 0:
-            px_per_cm = bbox_short / ref_short
-        else:
-            px_per_cm = None
+        if (ref_height_cm or ref_width_cm) and rw > 0 and rh > 0:
+            ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
+            ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
+            bbox_long = max(rw, rh)
+            bbox_short = min(rw, rh)
 
-        if px_per_cm and px_per_cm > 0:
-            result['pixels_per_cm'] = round(px_per_cm, 2)
+            if ref_long > 0 and bbox_long > 0:
+                px_per_cm = bbox_long / ref_long
+            elif ref_short > 0 and bbox_short > 0:
+                px_per_cm = bbox_short / ref_short
+            else:
+                px_per_cm = None
 
-            if plant_bbox_px:
-                _, _, pw, ph = plant_bbox_px
-                result['estimated_height_cm'] = round(ph / px_per_cm, 1)
-                result['estimated_width_cm'] = round(pw / px_per_cm, 1)
+            if px_per_cm and px_per_cm > 0:
+                result['pixels_per_cm'] = round(px_per_cm, 2)
 
-    # ── Compute depth grid for perspective correction ────────────
-    depth_grid = compute_depth_grid(image)
-    if depth_grid is not None:
-        result['depth_grid'] = depth_grid
+                if plant_bbox_px:
+                    _, _, pw, ph = plant_bbox_px
+                    result['estimated_height_cm'] = round(ph / px_per_cm, 1)
+                    result['estimated_width_cm'] = round(pw / px_per_cm, 1)
 
-        # Also compute the depth at the CENTER of the reference bbox
-        # so the frontend can calculate correction factors.
-        # Center-point avoids background blending at edges.
-        grid_h = len(depth_grid)
-        grid_w = len(depth_grid[0]) if grid_h > 0 else 0
-        if grid_h > 0 and grid_w > 0:
-            # Center of the reference bbox in grid coords
-            center_y = (ymin_n + ymax_n) / 2 / 1000
-            center_x = (xmin_n + xmax_n) / 2 / 1000
-            gr = max(0, min(grid_h - 1, int(center_y * grid_h)))
-            gc = max(0, min(grid_w - 1, int(center_x * grid_w)))
-
-            result['ref_depth'] = depth_grid[gr][gc]
-            logger.info("Reference center depth: %.4f at grid[%d][%d]",
-                        result['ref_depth'], gr, gc)
-    else:
-        logger.warning("Depth estimation unavailable — no perspective correction")
+    if tof_depth is not None:
+        result['depth_grid'] = generate_tof_depth_grid(tof_depth)
 
     result['success'] = True
     return result

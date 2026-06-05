@@ -1740,6 +1740,59 @@ def get_capture_image(capture_id):
     )
 
 
+@app.route('/api/camera/captures/<int:capture_id>/depth', methods=['GET'])
+def get_capture_depth(capture_id):
+    """Serve the ToF depth map as a colorized heatmap JPEG."""
+    capture = CameraCapture.query.get_or_404(capture_id)
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+
+    _, depth_path = _resolve_capture_paths(capture.filename)
+
+    resolved = os.path.realpath(depth_path)
+    if not resolved.startswith(os.path.realpath(captures_dir) + os.sep):
+        return jsonify({'error': 'Invalid file path'}), 403
+
+    if not os.path.exists(resolved):
+        return jsonify({'error': 'No depth data for this capture'}), 404
+
+    try:
+        import numpy as np
+        import cv2
+        import io
+
+        depth = np.load(resolved)
+
+        # Clamp to valid ToF range (0-6000mm) and normalize to 0-255
+        depth_clamped = np.clip(depth, 0, 6000).astype(np.float32)
+        valid = depth_clamped > 0
+        if np.any(valid):
+            d_min = depth_clamped[valid].min()
+            d_max = depth_clamped[valid].max()
+            if d_max > d_min:
+                depth_norm = ((depth_clamped - d_min) / (d_max - d_min) * 255).astype(np.uint8)
+            else:
+                depth_norm = np.zeros_like(depth_clamped, dtype=np.uint8)
+        else:
+            depth_norm = np.zeros_like(depth_clamped, dtype=np.uint8)
+
+        # Invert so closer = warm (red), farther = cool (blue)
+        depth_norm = 255 - depth_norm
+
+        # Apply JET colormap for a nice thermal look
+        heatmap = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+
+        # Resize to match RGB image dimensions (1920x1080) for overlay
+        heatmap_resized = cv2.resize(heatmap, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+
+        _, buf = cv2.imencode('.jpg', heatmap_resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return send_file(
+            io.BytesIO(buf.tobytes()),
+            mimetype='image/jpeg',
+            download_name=f'depth_{capture_id}.jpg'
+        )
+    except Exception as e:
+        return jsonify({'error': f'Failed to render depth: {str(e)}'}), 500
+
 @app.route('/api/camera/captures/<int:capture_id>/analyze', methods=['POST'])
 def analyze_capture(capture_id):
     """Run vision analysis on a captured image."""

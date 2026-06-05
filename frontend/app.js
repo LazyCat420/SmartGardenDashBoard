@@ -5181,14 +5181,40 @@ function renderCaptureGallery() {
 
         const imgContainer = document.createElement('div');
         imgContainer.className = 'capture-image-container';
+        imgContainer.style.position = 'relative';
 
         const img = document.createElement('img');
         const ep = cameraEndpoints.find(e => e.id === capture.endpoint_id);
         const queryParams = ep ? `?r=${ep.rotation}&h=${ep.hflip ? 1 : 0}&v=${ep.vflip ? 1 : 0}` : '';
-        img.src = `${API_BASE}/camera/captures/${capture.id}/image${queryParams}`;
+        const rgbSrc = `${API_BASE}/camera/captures/${capture.id}/image${queryParams}`;
+        const depthSrc = `${API_BASE}/camera/captures/${capture.id}/depth`;
+        img.src = rgbSrc;
         img.alt = 'Plant capture';
         img.loading = 'lazy';
         imgContainer.appendChild(img);
+
+        // Depth toggle button (top-left corner of image)
+        const depthToggle = document.createElement('button');
+        depthToggle.className = 'btn btn-sm';
+        depthToggle.style.cssText = 'position:absolute;top:6px;left:6px;z-index:2;background:rgba(0,0,0,0.65);color:#0ff;border:1px solid #0ff;font-size:0.7rem;padding:2px 7px;border-radius:4px;cursor:pointer;backdrop-filter:blur(4px);';
+        depthToggle.textContent = '🌡️ Depth';
+        depthToggle.title = 'Toggle ToF depth heatmap';
+        let showingDepth = false;
+        depthToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showingDepth = !showingDepth;
+            if (showingDepth) {
+                img.src = depthSrc;
+                depthToggle.style.background = 'rgba(0,200,255,0.3)';
+                depthToggle.style.borderColor = '#0ff';
+                depthToggle.textContent = '📷 RGB';
+            } else {
+                img.src = rgbSrc;
+                depthToggle.style.background = 'rgba(0,0,0,0.65)';
+                depthToggle.textContent = '🌡️ Depth';
+            }
+        });
+        imgContainer.appendChild(depthToggle);
 
         // Analysis status badge
         const badge = document.createElement('span');

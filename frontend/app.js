@@ -5403,9 +5403,41 @@ function renderCaptureGallery() {
             buttonsRow.appendChild(viewBtn);
         }
 
+        // Delete button — always visible on every capture
+        const deleteRow = document.createElement('div');
+        deleteRow.style.display = 'flex';
+        deleteRow.style.justifyContent = 'flex-end';
+        deleteRow.style.marginTop = '4px';
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-sm';
+        deleteBtn.style.cssText = 'background:var(--danger);color:#fff;font-size:0.75rem;padding:3px 8px;';
+        deleteBtn.textContent = '🗑️ Delete';
+        deleteBtn.addEventListener('click', () => deleteCapture(capture.id));
+        deleteRow.appendChild(deleteBtn);
+        actions.appendChild(deleteRow);
+
         card.appendChild(actions);
         container.appendChild(card);
     });
+}
+
+async function deleteCapture(captureId) {
+    if (!confirm('Delete this capture and its files? This cannot be undone.')) return;
+    try {
+        const response = await fetch(`${API_BASE}/camera/captures/${captureId}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('🗑️ Capture deleted', 'success');
+            await loadCameraCaptures();
+        } else {
+            showToast('Delete failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showToast('Delete request failed', 'error');
+    }
 }
 
 async function measureCapture(captureId, options = {}) {

@@ -90,10 +90,8 @@ def run_pending_schedules():
         logger.info(f"Scheduled capture saved as ID {capture.id}. Triggering vision analysis...")
 
         # 3. Trigger vision analysis
-        captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
-        safe_filename = os.path.basename(capture.filename)
-        image_path = os.path.join(captures_dir, safe_filename + ".jpg")
-        depth_path = os.path.join(captures_dir, safe_filename + "_depth.npy")
+        from backend.main import _resolve_capture_paths
+        image_path, depth_path = _resolve_capture_paths(capture.filename)
 
         capture.analysis_status = 'analyzing'
         db.session.commit()

@@ -51,16 +51,7 @@ RUN mkdir -p ./backend/models \
     && mv yolov8n.onnx ./backend/models/yolov8n.onnx \
     && rm -f yolov8n.pt || echo 'YOLO model pre-download skipped (will download at first run)'
 
-# ── Pre-download MiDaS depth model ───────────────────────────
-# MiDaS DPT-Small (~25MB) for monocular depth estimation.
-# torch.hub.load clones the repo, so git is needed.
-RUN mkdir -p ./backend/models/hub \
-    && python -c "\
-import torch; \
-torch.hub.set_dir('./backend/models/hub'); \
-model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', source='github', trust_repo=True); \
-print('MiDaS DPT-Small downloaded successfully')" \
-    || echo 'MiDaS model pre-download skipped (will download at first run)'
+# NOTE: MiDaS depth model removed — physical ToF laser depth is used instead.
 
 # ── Copy frontend source ─────────────────────────────────────
 COPY frontend/ ./frontend/

@@ -1512,6 +1512,24 @@ from backend.camera_service import analyze_image as cam_analyze_image
 # crashing the app at startup if OpenCV system libs are missing.
 
 
+def _resolve_capture_paths(filename):
+    """Resolve a DB filename to (image_path, depth_path) on disk.
+
+    Handles both old format ('name.jpg') and new format ('name').
+    Old captures stored the full 'name.jpg' in the DB.
+    New captures store just the stem 'name' without extension.
+    """
+    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+    safe = os.path.basename(filename)
+
+    # Strip .jpg if it already ends with it (old format)
+    stem = safe[:-4] if safe.endswith('.jpg') else safe
+
+    image_path = os.path.join(captures_dir, stem + '.jpg')
+    depth_path = os.path.join(captures_dir, stem + '_depth.npy')
+    return image_path, depth_path
+
+
 @app.route('/api/camera/endpoints', methods=['GET'])
 def get_camera_endpoints():
     endpoints = CameraEndpoint.query.all()
@@ -1601,11 +1619,12 @@ def capture_from_endpoint(endpoint_id):
     data = request.json or {}
     plant_id = data.get('plant_id')
 
+    # Always use the dual-camera capture script, regardless of the
+    # legacy capture_command stored in the database.
     result = cam_capture_image(
         ssh_host=endpoint.ssh_host,
         ssh_user=endpoint.ssh_user,
         ssh_port=endpoint.ssh_port,
-        capture_command=endpoint.capture_command,
         endpoint_id=endpoint.id
     )
 
@@ -1655,15 +1674,33 @@ def get_capture(capture_id):
     return jsonify(capture.to_dict())
 
 
+@app.route('/api/camera/captures/<int:capture_id>', methods=['DELETE'])
+def delete_capture(capture_id):
+    """Delete a captured image and its files from disk."""
+    capture = CameraCapture.query.get_or_404(capture_id)
+
+    # Remove files from disk
+    image_path, depth_path = _resolve_capture_paths(capture.filename)
+    for fpath in (image_path, depth_path):
+        resolved = os.path.realpath(fpath)
+        captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
+        if resolved.startswith(os.path.realpath(captures_dir) + os.sep):
+            try:
+                os.remove(resolved)
+            except FileNotFoundError:
+                pass
+
+    db.session.delete(capture)
+    db.session.commit()
+    return jsonify({'success': True, 'message': f'Capture {capture_id} deleted'})
+
 @app.route('/api/camera/captures/<int:capture_id>/image', methods=['GET'])
 def get_capture_image(capture_id):
     """Serve the captured image file."""
     capture = CameraCapture.query.get_or_404(capture_id)
     captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
 
-    # Security: use only the basename to prevent path traversal
-    safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename + ".jpg")
+    image_path, _ = _resolve_capture_paths(capture.filename)
 
     # Validate resolved path stays within captures directory
     resolved = os.path.realpath(image_path)
@@ -1705,11 +1742,8 @@ def get_capture_image(capture_id):
 def analyze_capture(capture_id):
     """Run vision analysis on a captured image."""
     capture = CameraCapture.query.get_or_404(capture_id)
-    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
 
-    safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename + ".jpg")
-    depth_path = os.path.join(captures_dir, safe_filename + "_depth.npy")
+    image_path, depth_path = _resolve_capture_paths(capture.filename)
 
     # Get plant context if linked
     plant_name = None
@@ -1835,10 +1869,8 @@ def measure_capture(capture_id):
     plant via computer vision, computes bounding boxes and cm dimensions.
     """
     capture = CameraCapture.query.get_or_404(capture_id)
-    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
 
-    safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename)
+    image_path, depth_path = _resolve_capture_paths(capture.filename)
 
     req_data = request.json or {}
     ref_type = req_data.get('reference_type')
@@ -1884,6 +1916,7 @@ def measure_capture(capture_id):
             rotation=rotation,
             hflip=hflip,
             vflip=vflip,
+            depth_path=depth_path,
         )
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
@@ -1900,10 +1933,8 @@ def calibrate_capture(capture_id):
     then auto-detect the plant via green segmentation.
     """
     capture = CameraCapture.query.get_or_404(capture_id)
-    captures_dir = os.environ.get('CAPTURES_DIR', '/app/captures')
 
-    safe_filename = os.path.basename(capture.filename)
-    image_path = os.path.join(captures_dir, safe_filename)
+    image_path, depth_path = _resolve_capture_paths(capture.filename)
 
     req_data = request.json or {}
     ref_bbox = req_data.get('reference_bbox')  # [ymin, xmin, ymax, xmax] 0-1000
@@ -1966,6 +1997,7 @@ def calibrate_capture(capture_id):
             rotation=rotation,
             hflip=hflip,
             vflip=vflip,
+            depth_path=depth_path,
         )
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500

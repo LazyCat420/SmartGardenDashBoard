@@ -1740,8 +1740,8 @@ def analyze_capture(capture_id):
         ref_width_cm = 6.6
         ref_height_cm = 12.2
     elif ref_type == 'aa_battery':
-        ref_width_cm = 1.4
-        ref_height_cm = 5.0
+        ref_width_cm = 1.45
+        ref_height_cm = 5.05
     elif ref_type == 'bic_lighter':
         ref_width_cm = 2.5
         ref_height_cm = 8.0
@@ -1848,8 +1848,8 @@ def measure_capture(capture_id):
         ref_width_cm = 6.6
         ref_height_cm = 12.2
     elif ref_type == 'aa_battery':
-        ref_width_cm = 1.4
-        ref_height_cm = 5.0
+        ref_width_cm = 1.45
+        ref_height_cm = 5.05
     elif ref_type == 'bic_lighter':
         ref_width_cm = 2.5
         ref_height_cm = 8.0
@@ -1936,8 +1936,8 @@ def calibrate_capture(capture_id):
         ref_width_cm = 6.6
         ref_height_cm = 12.2
     elif ref_type == 'aa_battery':
-        ref_width_cm = 1.4
-        ref_height_cm = 5.0
+        ref_width_cm = 1.45
+        ref_height_cm = 5.05
     elif ref_type == 'bic_lighter':
         ref_width_cm = 2.5
         ref_height_cm = 8.0

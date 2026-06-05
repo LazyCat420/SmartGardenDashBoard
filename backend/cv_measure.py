@@ -34,11 +34,12 @@ COCO_REFERENCE_MAP = {
 }
 
 # Known dimensions (height_cm, width_cm) for reference objects
+# height = longer dimension, width = shorter dimension
 KNOWN_DIMENSIONS = {
-    'soda_can':    {'height_cm': 12.2, 'width_cm': 6.6},
-    'aa_battery':  {'height_cm': 5.0,  'width_cm': 1.4},
-    'bic_lighter': {'height_cm': 8.0,  'width_cm': 2.5},
-    'credit_card': {'height_cm': 5.4,  'width_cm': 8.56},
+    'soda_can':    {'height_cm': 12.2,  'width_cm': 6.6},
+    'aa_battery':  {'height_cm': 5.05,  'width_cm': 1.45},
+    'bic_lighter': {'height_cm': 8.0,   'width_cm': 2.5},
+    'credit_card': {'height_cm': 8.56,  'width_cm': 5.4},
 }
 
 
@@ -453,10 +454,16 @@ def measure_objects(image_path, ref_type=None,
     if ref_bbox_px and (ref_height_cm or ref_width_cm):
         _, _, rw, rh = ref_bbox_px
 
-        if ref_height_cm and rh > 0:
-            px_per_cm_h = rh / ref_height_cm
-        elif ref_width_cm and rw > 0:
-            px_per_cm_h = rw / ref_width_cm
+        # Match longer bbox dimension to longer reference dimension
+        ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
+        ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
+        bbox_long = max(rw, rh)
+        bbox_short = min(rw, rh)
+
+        if ref_long > 0 and bbox_long > 0:
+            px_per_cm_h = bbox_long / ref_long
+        elif ref_short > 0 and bbox_short > 0:
+            px_per_cm_h = bbox_short / ref_short
         else:
             px_per_cm_h = None
 
@@ -543,11 +550,19 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
         if ref_width_cm is None:
             ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
 
-    if ref_height_cm or ref_width_cm:
-        if ref_height_cm and rh > 0:
-            px_per_cm = rh / ref_height_cm
-        elif ref_width_cm and rw > 0:
-            px_per_cm = rw / ref_width_cm
+    if (ref_height_cm or ref_width_cm) and rw > 0 and rh > 0:
+        # Match longer bbox dimension to longer reference dimension,
+        # shorter to shorter.  This handles any orientation.
+        ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
+        ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
+        bbox_long = max(rw, rh)
+        bbox_short = min(rw, rh)
+
+        # Use the longer dimension for better accuracy (more pixels)
+        if ref_long > 0 and bbox_long > 0:
+            px_per_cm = bbox_long / ref_long
+        elif ref_short > 0 and bbox_short > 0:
+            px_per_cm = bbox_short / ref_short
         else:
             px_per_cm = None
 

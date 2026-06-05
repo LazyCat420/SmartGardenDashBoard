@@ -5840,35 +5840,27 @@ function viewMeasurementResults(captureId, data) {
             ctx.fillRect(xmin, ymin, w_px, h_px);
             ctx.fillStyle = '#f97316';
             
-            // Calculate depth correction factor
+            // Calculate depth correction factor using CENTER-POINT sampling
             let depthCorrection = 1.0;
             let hasDepth = false;
             if (data.depth_grid && data.ref_depth != null) {
                 const gridH = data.depth_grid.length;
                 const gridW = gridH > 0 ? data.depth_grid[0].length : 0;
                 if (gridH > 0 && gridW > 0) {
-                    // Map custom box to grid coordinates (using 0-1 fractional coords)
-                    const gx1 = Math.max(0, Math.min(gridW - 1, Math.floor(Math.min(customBox.x1, customBox.x2) * gridW)));
-                    const gy1 = Math.max(0, Math.min(gridH - 1, Math.floor(Math.min(customBox.y1, customBox.y2) * gridH)));
-                    const gx2 = Math.max(gx1 + 1, Math.min(gridW, Math.ceil(Math.max(customBox.x1, customBox.x2) * gridW)));
-                    const gy2 = Math.max(gy1 + 1, Math.min(gridH, Math.ceil(Math.max(customBox.y1, customBox.y2) * gridH)));
+                    // Sample depth at the CENTER of the custom box (avoids background bleed)
+                    const centerX = (Math.min(customBox.x1, customBox.x2) + Math.max(customBox.x1, customBox.x2)) / 2;
+                    const centerY = (Math.min(customBox.y1, customBox.y2) + Math.max(customBox.y1, customBox.y2)) / 2;
+                    const gc = Math.max(0, Math.min(gridW - 1, Math.floor(centerX * gridW)));
+                    const gr = Math.max(0, Math.min(gridH - 1, Math.floor(centerY * gridH)));
+                    const targetDepth = data.depth_grid[gr][gc];
+                    const refDepth = data.ref_depth;
 
-                    // Average depth in target region
-                    let depthSum = 0;
-                    let depthCount = 0;
-                    for (let r = gy1; r < gy2; r++) {
-                        for (let c = gx1; c < gx2; c++) {
-                            depthSum += data.depth_grid[r][c];
-                            depthCount++;
-                        }
-                    }
-                    if (depthCount > 0) {
-                        const targetDepth = depthSum / depthCount;
-                        const refDepth = data.ref_depth;
-                        // Objects further away (higher depth) appear smaller,
-                        // so scale UP by target/ref ratio
-                        if (refDepth > 0.001) {
-                            depthCorrection = targetDepth / refDepth;
+                    if (refDepth > 0.001) {
+                        const rawCorrection = targetDepth / refDepth;
+                        // Deadzone: skip correction if depths are within 15%
+                        if (Math.abs(rawCorrection - 1.0) > 0.15) {
+                            // Clamp to reasonable range (0.3x to 3.0x)
+                            depthCorrection = Math.max(0.3, Math.min(3.0, rawCorrection));
                             hasDepth = true;
                         }
                     }

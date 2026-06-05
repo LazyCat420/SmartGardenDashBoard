@@ -695,33 +695,21 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
     if depth_grid is not None:
         result['depth_grid'] = depth_grid
 
-        # Also compute the average depth at the reference bbox
-        # so the frontend can calculate correction factors
+        # Also compute the depth at the CENTER of the reference bbox
+        # so the frontend can calculate correction factors.
+        # Center-point avoids background blending at edges.
         grid_h = len(depth_grid)
         grid_w = len(depth_grid[0]) if grid_h > 0 else 0
         if grid_h > 0 and grid_w > 0:
-            # Map reference bbox to grid coords
-            gy1 = int(ymin_n / 1000 * grid_h)
-            gx1 = int(xmin_n / 1000 * grid_w)
-            gy2 = int(ymax_n / 1000 * grid_h)
-            gx2 = int(xmax_n / 1000 * grid_w)
+            # Center of the reference bbox in grid coords
+            center_y = (ymin_n + ymax_n) / 2 / 1000
+            center_x = (xmin_n + xmax_n) / 2 / 1000
+            gr = max(0, min(grid_h - 1, int(center_y * grid_h)))
+            gc = max(0, min(grid_w - 1, int(center_x * grid_w)))
 
-            # Clamp to grid bounds
-            gy1 = max(0, min(gy1, grid_h - 1))
-            gy2 = max(gy1 + 1, min(gy2, grid_h))
-            gx1 = max(0, min(gx1, grid_w - 1))
-            gx2 = max(gx1 + 1, min(gx2, grid_w))
-
-            # Average depth in reference region
-            ref_depths = []
-            for row in range(gy1, gy2):
-                for col in range(gx1, gx2):
-                    ref_depths.append(depth_grid[row][col])
-
-            if ref_depths:
-                result['ref_depth'] = round(sum(ref_depths) / len(ref_depths), 4)
-                logger.info("Reference depth: %.4f (avg over %d cells)",
-                            result['ref_depth'], len(ref_depths))
+            result['ref_depth'] = depth_grid[gr][gc]
+            logger.info("Reference center depth: %.4f at grid[%d][%d]",
+                        result['ref_depth'], gr, gc)
     else:
         logger.warning("Depth estimation unavailable — no perspective correction")
 

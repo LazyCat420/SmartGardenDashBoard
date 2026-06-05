@@ -5720,7 +5720,8 @@ function viewMeasurementResults(captureId, data) {
 
     const canvas = document.createElement('canvas');
     canvas.id = 'measureDetailCanvas';
-    canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;width:100%;height:100%;';
+    const hasCalibration = !!data.pixels_per_cm;
+    canvas.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;${hasCalibration ? 'cursor:crosshair;' : 'pointer-events:none;'}`;
     wrapper.appendChild(canvas);
 
     modalBody.appendChild(wrapper);
@@ -5749,7 +5750,26 @@ function viewMeasurementResults(captureId, data) {
     });
     modalBody.appendChild(grid);
 
+    if (hasCalibration) {
+        const hint = document.createElement('p');
+        hint.style.cssText = 'margin-top:12px;font-size:0.85rem;color:var(--text-secondary);text-align:center;';
+        hint.textContent = '💡 Tip: Click and drag on the image to measure any other object.';
+        modalBody.appendChild(hint);
+    }
+
     overlay.classList.add('active');
+
+    let customBox = null;
+    let isDrawing = false;
+
+    function getRelativePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const x = (clientX - rect.left) / rect.width;
+        const y = (clientY - rect.top) / rect.height;
+        return { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+    }
 
     // Draw bounding boxes
     const drawBboxes = () => {
@@ -5804,7 +5824,78 @@ function viewMeasurementResults(captureId, data) {
             ctx.fillStyle = '#ffffff';
             ctx.fillText(label, xmin + 5, ymin - (th * 0.25));
         }
+        if (customBox && hasCalibration) {
+            const xmin = Math.min(customBox.x1, customBox.x2) * canvas.width;
+            const ymin = Math.min(customBox.y1, customBox.y2) * canvas.height;
+            const xmax = Math.max(customBox.x1, customBox.x2) * canvas.width;
+            const ymax = Math.max(customBox.y1, customBox.y2) * canvas.height;
+            const w_px = xmax - xmin;
+            const h_px = ymax - ymin;
+            
+            ctx.strokeStyle = '#f97316'; // Orange
+            ctx.strokeRect(xmin, ymin, w_px, h_px);
+            ctx.fillStyle = 'rgba(249, 115, 22, 0.15)';
+            ctx.fillRect(xmin, ymin, w_px, h_px);
+            ctx.fillStyle = '#f97316';
+            
+            const w_cm = (w_px / data.pixels_per_cm).toFixed(1);
+            const h_cm = (h_px / data.pixels_per_cm).toFixed(1);
+            const label = `Custom (${h_cm}cm H × ${w_cm}cm W)`;
+            
+            const tw = ctx.measureText(label).width;
+            const th = Math.max(16, Math.round(canvas.width * 0.022));
+            ctx.fillRect(xmin, ymin - th, tw + 10, th);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(label, xmin + 5, ymin - (th * 0.25));
+        }
     };
+
+    if (hasCalibration) {
+        const startDrawing = (e) => {
+            e.preventDefault();
+            isDrawing = true;
+            const pos = getRelativePos(e);
+            customBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+            drawBboxes();
+        };
+
+        const drawMove = (e) => {
+            if (!isDrawing) return;
+            e.preventDefault();
+            const pos = getRelativePos(e);
+            customBox.x2 = pos.x;
+            customBox.y2 = pos.y;
+            drawBboxes();
+        };
+
+        const endDrawing = () => {
+            isDrawing = false;
+        };
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', drawMove);
+        window.addEventListener('mouseup', endDrawing);
+
+        canvas.addEventListener('touchstart', startDrawing, { passive: false });
+        canvas.addEventListener('touchmove', drawMove, { passive: false });
+        window.addEventListener('touchend', endDrawing);
+
+        // Cleanup global listeners when modal closes
+        const closeBtn = document.getElementById('modalClose');
+        const overlayClick = (e) => {
+            if (e.target === overlay) removeListeners();
+        };
+        
+        const removeListeners = () => {
+            window.removeEventListener('mouseup', endDrawing);
+            window.removeEventListener('touchend', endDrawing);
+            closeBtn.removeEventListener('click', removeListeners);
+            overlay.removeEventListener('click', overlayClick);
+        };
+        
+        closeBtn.addEventListener('click', removeListeners);
+        overlay.addEventListener('click', overlayClick);
+    }
 
     if (img.complete) {
         drawBboxes();

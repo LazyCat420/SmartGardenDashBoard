@@ -1505,6 +1505,53 @@ def apply_actions():
     return jsonify({"results": results})
 
 
+# ============== Chart Data Routes ==============
+
+@app.route('/api/charts/growth/<int:plant_id>', methods=['GET'])
+def get_growth_chart(plant_id):
+    """Get growth data formatted for charts."""
+    logs = GrowthLog.query.filter_by(plant_id=plant_id)\
+        .order_by(GrowthLog.date.asc()).all()
+
+    return jsonify({
+        'dates': [l.date.strftime('%Y-%m-%d') if l.date else '' for l in logs],
+        'heights': [l.height_cm for l in logs],
+        'widths': [l.width_cm for l in logs],
+        'leaf_counts': [l.leaf_count for l in logs],
+        'health_ratings': [l.health_rating for l in logs]
+    })
+
+
+@app.route('/api/charts/watering', methods=['GET'])
+@app.route('/api/charts/watering/<int:plant_id>', methods=['GET'])
+def get_watering_chart(plant_id=None):
+    """Get watering data for all plants or a specific plant, formatted for charts."""
+    if not plant_id:
+        plant_id = request.args.get('plant_id', type=int)
+
+    query = Watering.query.order_by(Watering.date.asc())
+    if plant_id:
+        query = query.filter_by(plant_id=plant_id)
+
+    logs = query.all()
+
+    return jsonify({
+        'dates': [l.date.strftime('%Y-%m-%d') if l.date else '' for l in logs],
+        'amounts': [l.amount_ml or 0 for l in logs],
+        'methods': [l.method or '' for l in logs]
+    })
+
+
+@app.route('/api/charts/budget', methods=['GET'])
+def get_budget_chart():
+    """Get budget data formatted for charts (placeholder — no budget models in main.py)."""
+    return jsonify({
+        'by_category': {},
+        'by_month': {},
+        'total_spent': 0
+    })
+
+
 # ============== Camera API Routes ==============
 
 from backend.camera_service import test_connection as cam_test_connection
@@ -1867,6 +1914,16 @@ def auto_calibrate_capture(capture_id):
     capture = CameraCapture.query.get_or_404(capture_id)
     image_path, depth_path = _resolve_capture_paths(capture.filename)
 
+    # Pre-check: does the image file actually exist on disk?
+    if not os.path.exists(image_path):
+        app.logger.error('Auto-calibrate: image file not found for capture '
+                         '%d: %s', capture_id, image_path)
+        return jsonify({
+            'success': False,
+            'error': f'Image file not found on disk: {os.path.basename(image_path)}',
+            'auto_calibration': {'battery_detected': False}
+        }), 404
+
     endpoint = CameraEndpoint.query.get(capture.endpoint_id)
     rotation = endpoint.rotation if endpoint else 0
     hflip = endpoint.hflip if endpoint else False
@@ -1913,7 +1970,9 @@ def auto_calibrate_capture(capture_id):
                     'width_cm': result.get('estimated_width_cm'),
                 }
         except Exception as exc:
-            return jsonify({'error': str(exc)}), 500
+            app.logger.exception('Manual calibrate failed for capture %d',
+                                 capture_id)
+            return jsonify({'error': f'Manual calibration failed: {exc}'}), 500
     else:
         # Auto-detect battery
         try:
@@ -1924,7 +1983,13 @@ def auto_calibrate_capture(capture_id):
                 depth_path=depth_path
             )
         except Exception as exc:
-            return jsonify({'error': str(exc)}), 500
+            app.logger.exception('Auto-calibrate failed for capture %d',
+                                 capture_id)
+            return jsonify({
+                'success': False,
+                'error': f'Auto-detection crashed: {exc}',
+                'auto_calibration': {'battery_detected': False}
+            }), 500
 
     # Save calibration data
     capture.auto_calibration = json.dumps(calib)

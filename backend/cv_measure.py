@@ -463,89 +463,169 @@ def auto_detect_battery(image):
       2. Edge detection on filtered regions
       3. Contour analysis with aspect ratio (~3.48:1), size, and
          rectangularity scoring
+      4. Fallback: pure shape-based detection (no color filter) if
+         color-based search finds nothing — handles dark-body batteries
 
     Returns the best bounding box as (x, y, w, h) in pixels and a
     confidence score, or (None, 0.0) if no battery was found.
+    """
+    try:
+        import cv2
+        import numpy as np
+        import math
+    except ImportError as exc:
+        logger.error("auto_detect_battery: missing dependency: %s", exc)
+        return None, 0.0
+
+    try:
+        h_img, w_img = image.shape[:2]
+        img_area = h_img * w_img
+
+        # Expected aspect ratio: 5.05 / 1.45 ≈ 3.48
+        EXPECTED_ASPECT = 5.05 / 1.45
+        ASPECT_TOL = 0.40  # ±40% tolerance (widened from 35%)
+        min_aspect = EXPECTED_ASPECT * (1 - ASPECT_TOL)
+        max_aspect = EXPECTED_ASPECT * (1 + ASPECT_TOL)
+
+        # Expected size range (fraction of image area)
+        # A battery in a 1920×1080 frame is roughly 40-150px wide × 140-500px tall
+        MIN_AREA_FRAC = 0.0002   # ~400 px² in 2M image (lowered)
+        MAX_AREA_FRAC = 0.05     # ~100000 px² (raised)
+        IDEAL_AREA_FRAC = 0.005  # ~10000 px²
+        min_area = img_area * MIN_AREA_FRAC
+        max_area = img_area * MAX_AREA_FRAC
+        ideal_area = img_area * IDEAL_AREA_FRAC
+
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # ── Stage 1: Color filtering ─────────────────────────────────
+        # Batteries have metallic silver/grey/copper tones.
+        # Silver/grey: low saturation, mid-to-high value
+        # Widened: V floor lowered from 80→50 to catch dim lighting
+        lower_silver = np.array([0, 0, 50])
+        upper_silver = np.array([180, 70, 240])
+        mask_silver = cv2.inRange(hsv, lower_silver, upper_silver)
+
+        # Copper/gold top (positive terminal): warm hue, moderate saturation
+        # Widened: V range 60-255 (was 80-230), S range expanded
+        lower_copper = np.array([8, 30, 60])
+        upper_copper = np.array([35, 220, 255])
+        mask_copper = cv2.inRange(hsv, lower_copper, upper_copper)
+
+        # Dark metallic body (Duracell-style dark green/black wrapper)
+        # These are low-value, low-saturation dark regions
+        lower_dark = np.array([0, 0, 25])
+        upper_dark = np.array([180, 80, 90])
+        mask_dark = cv2.inRange(hsv, lower_dark, upper_dark)
+
+        # Combine metallic masks
+        mask_metallic = cv2.bitwise_or(mask_silver, mask_copper)
+        mask_metallic = cv2.bitwise_or(mask_metallic, mask_dark)
+
+        # Exclude green areas (plants) from the search
+        lower_green = np.array([30, 40, 40])
+        upper_green = np.array([90, 255, 255])
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+        # Exclude brown (soil/dirt) — NARROWED to avoid eating battery copper
+        # Reduced saturation range and value ceiling
+        lower_brown = np.array([8, 80, 20])
+        upper_brown = np.array([22, 200, 90])
+        mask_brown = cv2.inRange(hsv, lower_brown, upper_brown)
+
+        # Final mask: metallic areas minus green/brown
+        mask_exclude = cv2.bitwise_or(mask_green, mask_brown)
+        mask = cv2.bitwise_and(mask_metallic, cv2.bitwise_not(mask_exclude))
+
+        # Morphological cleanup
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+        # ── Stage 2: Edge detection on masked region ─────────────────
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Apply mask to grayscale for edge detection
+        gray_masked = cv2.bitwise_and(gray, gray, mask=mask)
+        edges = cv2.Canny(gray_masked, 40, 120)
+
+        # Also run edges on the full grayscale as backup
+        edges_full = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+
+        # Combine: masked edges + full edges within metallic mask
+        edges_combined = cv2.bitwise_or(edges, cv2.bitwise_and(edges_full, mask))
+
+        # Dilate to connect nearby edges
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        edges_combined = cv2.dilate(edges_combined, kernel_dilate, iterations=2)
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        edges_combined = cv2.morphologyEx(edges_combined, cv2.MORPH_CLOSE,
+                                           kernel_close, iterations=1)
+
+        # ── Stage 3: Contour analysis ────────────────────────────────
+        candidates = _score_battery_contours(
+            edges_combined, mask, image,
+            min_area, max_area, ideal_area,
+            min_aspect, max_aspect, EXPECTED_ASPECT,
+            h_img, w_img, use_metallic_score=True
+        )
+
+        # ── Stage 4: Fallback — pure shape detection (no color filter) ──
+        # If color-based detection found nothing, try edge-only approach.
+        # This catches batteries with unusual colors (black, dark blue, etc.)
+        if not candidates:
+            logger.info("Color-based detection found nothing, trying "
+                         "shape-only fallback...")
+            edges_shape = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 100)
+            edges_shape = cv2.dilate(edges_shape, kernel_dilate, iterations=2)
+            edges_shape = cv2.morphologyEx(edges_shape, cv2.MORPH_CLOSE,
+                                            kernel_close, iterations=2)
+
+            candidates = _score_battery_contours(
+                edges_shape, mask, image,
+                min_area, max_area, ideal_area,
+                min_aspect, max_aspect, EXPECTED_ASPECT,
+                h_img, w_img, use_metallic_score=False
+            )
+
+        if not candidates:
+            logger.info("No battery candidates found after all detection stages")
+            return None, 0.0
+
+        # Return the best candidate
+        candidates.sort(key=lambda c: c['score'], reverse=True)
+        best = candidates[0]
+
+        # Minimum confidence threshold — avoid false positives
+        if best['score'] < 0.20:  # Lowered from 0.25 to catch more
+            logger.info("Best battery candidate score %.3f below threshold 0.20, "
+                         "rejecting", best['score'])
+            return None, 0.0
+
+        logger.info("Battery detected at %s (score=%.3f aspect=%.2f area=%d, "
+                     "from %d candidates)",
+                     best['bbox'], best['score'], best['aspect'],
+                     best['area'], len(candidates))
+        return best['bbox'], best['score']
+
+    except Exception as exc:
+        logger.exception("auto_detect_battery crashed: %s", exc)
+        return None, 0.0
+
+
+def _score_battery_contours(edges, mask, image,
+                             min_area, max_area, ideal_area,
+                             min_aspect, max_aspect, expected_aspect,
+                             h_img, w_img, use_metallic_score=True):
+    """Score contours from an edge map as battery candidates.
+
+    Shared scoring logic used by both the color-filtered and
+    shape-only detection stages.
     """
     import cv2
     import numpy as np
     import math
 
-    h_img, w_img = image.shape[:2]
-    img_area = h_img * w_img
-
-    # Expected aspect ratio: 5.05 / 1.45 ≈ 3.48
-    EXPECTED_ASPECT = 5.05 / 1.45
-    ASPECT_TOL = 0.35  # ±35% tolerance
-    min_aspect = EXPECTED_ASPECT * (1 - ASPECT_TOL)
-    max_aspect = EXPECTED_ASPECT * (1 + ASPECT_TOL)
-
-    # Expected size range (fraction of image area)
-    # A battery in a 1920×1080 frame is roughly 40-150px wide × 140-500px tall
-    MIN_AREA_FRAC = 0.0003   # ~600 px² in 2M image
-    MAX_AREA_FRAC = 0.04     # ~80000 px²
-    IDEAL_AREA_FRAC = 0.005  # ~10000 px²
-    min_area = img_area * MIN_AREA_FRAC
-    max_area = img_area * MAX_AREA_FRAC
-    ideal_area = img_area * IDEAL_AREA_FRAC
-
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    # ── Stage 1: Color filtering ─────────────────────────────────
-    # Batteries have metallic silver/grey/copper tones.
-    # Silver/grey: low saturation, mid-to-high value
-    lower_silver = np.array([0, 0, 80])
-    upper_silver = np.array([180, 60, 220])
-    mask_silver = cv2.inRange(hsv, lower_silver, upper_silver)
-
-    # Copper/gold top (positive terminal): warm hue, moderate saturation
-    lower_copper = np.array([10, 40, 80])
-    upper_copper = np.array([30, 200, 230])
-    mask_copper = cv2.inRange(hsv, lower_copper, upper_copper)
-
-    # Combine metallic masks
-    mask_metallic = cv2.bitwise_or(mask_silver, mask_copper)
-
-    # Exclude green areas (plants) from the search
-    lower_green = np.array([25, 30, 30])
-    upper_green = np.array([95, 255, 255])
-    mask_green = cv2.inRange(hsv, lower_green, upper_green)
-
-    # Exclude dark brown (soil/dirt)
-    lower_brown = np.array([5, 50, 20])
-    upper_brown = np.array([25, 200, 120])
-    mask_brown = cv2.inRange(hsv, lower_brown, upper_brown)
-
-    # Final mask: metallic areas minus green/brown
-    mask_exclude = cv2.bitwise_or(mask_green, mask_brown)
-    mask = cv2.bitwise_and(mask_metallic, cv2.bitwise_not(mask_exclude))
-
-    # Morphological cleanup
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    # ── Stage 2: Edge detection on masked region ─────────────────
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Apply mask to grayscale for edge detection
-    gray_masked = cv2.bitwise_and(gray, gray, mask=mask)
-    edges = cv2.Canny(gray_masked, 40, 120)
-
-    # Also run edges on the full grayscale as backup
-    edges_full = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
-
-    # Combine: masked edges + full edges within metallic mask
-    edges_combined = cv2.bitwise_or(edges, cv2.bitwise_and(edges_full, mask))
-
-    # Dilate to connect nearby edges
-    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    edges_combined = cv2.dilate(edges_combined, kernel_dilate, iterations=2)
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    edges_combined = cv2.morphologyEx(edges_combined, cv2.MORPH_CLOSE,
-                                       kernel_close, iterations=1)
-
-    # ── Stage 3: Contour analysis ────────────────────────────────
-    contours, _ = cv2.findContours(edges_combined, cv2.RETR_EXTERNAL,
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
                                     cv2.CHAIN_APPROX_SIMPLE)
 
     candidates = []
@@ -576,7 +656,7 @@ def auto_detect_battery(image):
 
         # ── Scoring ──────────────────────────────────────────────
         # Aspect ratio score (1.0 = perfect match)
-        aspect_diff = abs(aspect - EXPECTED_ASPECT) / EXPECTED_ASPECT
+        aspect_diff = abs(aspect - expected_aspect) / expected_aspect
         aspect_score = max(0.0, 1.0 - aspect_diff)
 
         # Size score (Gaussian around ideal area)
@@ -595,12 +675,16 @@ def auto_detect_battery(image):
         rect_score = min(1.0, rectangularity / 0.7)  # Normalize: 0.7+ = 1.0
 
         # Metallic pixel density within the bounding box
-        roi_mask = mask[y:y+h, x:x+w]
-        if roi_mask.size > 0:
-            metallic_ratio = np.count_nonzero(roi_mask) / roi_mask.size
+        if use_metallic_score:
+            roi_mask = mask[y:y+h, x:x+w]
+            if roi_mask.size > 0:
+                metallic_ratio = np.count_nonzero(roi_mask) / roi_mask.size
+            else:
+                metallic_ratio = 0
+            metallic_score = min(1.0, metallic_ratio / 0.3)  # 30%+ metallic = 1.0
         else:
-            metallic_ratio = 0
-        metallic_score = min(1.0, metallic_ratio / 0.3)  # 30%+ metallic = 1.0
+            # Shape-only fallback: give a baseline metallic score
+            metallic_score = 0.4
 
         # Combined score: weighted combination
         score = (aspect_score * 0.35 +
@@ -626,28 +710,7 @@ def auto_detect_battery(image):
                      aspect_score, size_score, rect_score,
                      metallic_score, score)
 
-    if not candidates:
-        logger.info("No battery candidates found (%d contours checked, "
-                     "area range %.0f-%.0f, aspect range %.2f-%.2f)",
-                     len(contours), min_area, max_area,
-                     min_aspect, max_aspect)
-        return None, 0.0
-
-    # Return the best candidate
-    candidates.sort(key=lambda c: c['score'], reverse=True)
-    best = candidates[0]
-
-    # Minimum confidence threshold — avoid false positives
-    if best['score'] < 0.25:
-        logger.info("Best battery candidate score %.3f below threshold 0.25, "
-                     "rejecting", best['score'])
-        return None, 0.0
-
-    logger.info("Battery detected at %s (score=%.3f aspect=%.2f area=%d, "
-                 "from %d candidates)",
-                 best['bbox'], best['score'], best['aspect'],
-                 best['area'], len(candidates))
-    return best['bbox'], best['score']
+    return candidates
 
 
 def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,

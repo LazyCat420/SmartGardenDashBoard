@@ -105,6 +105,21 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
         
     try:
         depth_buf = np.load(depth_path)
+        
+        # Diagnostic logging — helps verify ToF Near Mode is working
+        valid = depth_buf[depth_buf > 0]
+        if valid.size > 0:
+            logger.info("ToF depth loaded: shape=%s, min=%.0fmm, max=%.0fmm, "
+                        "mean=%.0fmm, valid=%d/%d (%.1f%%)",
+                        depth_buf.shape, valid.min(), valid.max(), valid.mean(),
+                        valid.size, depth_buf.size,
+                        100 * valid.size / depth_buf.size)
+        else:
+            logger.warning("ToF depth loaded but ALL values are zero/invalid! "
+                          "shape=%s — sensor may be saturated or misconfigured",
+                          depth_buf.shape)
+            return None
+        
         # ToF array is usually 240x180. Resize to match RGB (1920x1080)
         # INTER_NEAREST to avoid interpolating invalid edge depths,
         # but INTER_LINEAR gives smoother depth maps for bounding boxes.
@@ -114,6 +129,7 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
     except Exception as exc:
         logger.error("Failed to load ToF depth map: %s", exc)
         return None
+
 
 def calculate_physical_size(px_width, px_height, distance_mm, img_width=1920, img_height=1080):
     """

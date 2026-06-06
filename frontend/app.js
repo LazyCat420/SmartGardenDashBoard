@@ -5162,7 +5162,12 @@ async function captureNow() {
 
         const data = await response.json();
         if (data.success) {
-            showToast('\ud83d\udcf8 Image captured!', 'success');
+            if (data.auto_calibration && data.auto_calibration.battery_detected) {
+                const conf = Math.round((data.auto_calibration.battery_confidence || 0) * 100);
+                showToast(`\ud83d\udcf8 Captured! \ud83d\udd0b Battery detected (${conf}%) \u2014 auto-calibrated`, 'success');
+            } else {
+                showToast('\ud83d\udcf8 Image captured! \u26a0\ufe0f No battery detected', 'success');
+            }
             await loadCameraCaptures();
         } else {
             showToast(`Capture failed: ${data.error}`, 'error');
@@ -5252,6 +5257,92 @@ function renderCaptureGallery() {
         badge.textContent = capture.analysis_status;
         imgContainer.appendChild(badge);
 
+        // Battery calibration badge (top-right)
+        const calib = capture.auto_calibration;
+        if (calib && calib.battery_detected) {
+            const calibBadge = document.createElement('span');
+            calibBadge.style.cssText = 'position:absolute;top:6px;right:6px;z-index:2;background:rgba(0,0,0,0.7);color:#f59e0b;border:1px solid #f59e0b;font-size:0.7rem;padding:2px 7px;border-radius:4px;backdrop-filter:blur(4px);';
+            const conf = Math.round((calib.battery_confidence || 0) * 100);
+            calibBadge.textContent = `\ud83d\udd0b ${conf}%`;
+            calibBadge.title = `Battery detected (${conf}% confidence) \u2014 ${calib.pixels_per_cm || '?'} px/cm`;
+            imgContainer.appendChild(calibBadge);
+
+            // Battery bounding box overlay canvas
+            const bboxCanvas = document.createElement('canvas');
+            bboxCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1;';
+            imgContainer.appendChild(bboxCanvas);
+
+            // Draw battery bbox after image loads
+            const drawBatteryBbox = () => {
+                const rect = img.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                bboxCanvas.width = rect.width * dpr;
+                bboxCanvas.height = rect.height * dpr;
+                const ctx = bboxCanvas.getContext('2d');
+                ctx.scale(dpr, dpr);
+                ctx.clearRect(0, 0, rect.width, rect.height);
+
+                const bb = calib.battery_bbox; // [ymin, xmin, ymax, xmax] 0-1000
+                if (bb) {
+                    const x = (bb[1] / 1000) * rect.width;
+                    const y = (bb[0] / 1000) * rect.height;
+                    const w = ((bb[3] - bb[1]) / 1000) * rect.width;
+                    const h = ((bb[2] - bb[0]) / 1000) * rect.height;
+
+                    // Draw bounding box
+                    ctx.strokeStyle = '#f59e0b';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([4, 3]);
+                    ctx.strokeRect(x, y, w, h);
+                    ctx.setLineDash([]);
+
+                    // Label
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    const labelText = '\ud83d\udd0b AA Battery (ref)';
+                    const tm = ctx.measureText(labelText);
+                    ctx.fillRect(x, y - 14, tm.width + 6, 14);
+                    ctx.fillStyle = '#f59e0b';
+                    ctx.fillText(labelText, x + 3, y - 3);
+                }
+
+                // Draw plant bbox if available
+                const pb = calib.plant_bbox;
+                if (pb) {
+                    const px = (pb[1] / 1000) * rect.width;
+                    const py = (pb[0] / 1000) * rect.height;
+                    const pw = ((pb[3] - pb[1]) / 1000) * rect.width;
+                    const ph = ((pb[2] - pb[0]) / 1000) * rect.height;
+
+                    ctx.strokeStyle = '#22c55e';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([4, 3]);
+                    ctx.strokeRect(px, py, pw, ph);
+                    ctx.setLineDash([]);
+
+                    // Plant label with measurement
+                    ctx.font = 'bold 10px sans-serif';
+                    let plantLabel = '\ud83c\udf31 Plant';
+                    if (calib.ref_measurement) {
+                        plantLabel += ` (${calib.ref_measurement.height_cm || '?'}\u00d7${calib.ref_measurement.width_cm || '?'}cm)`;
+                    }
+                    const ptm = ctx.measureText(plantLabel);
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(px, py - 14, ptm.width + 6, 14);
+                    ctx.fillStyle = '#22c55e';
+                    ctx.fillText(plantLabel, px + 3, py - 3);
+                }
+            };
+
+            if (img.complete) {
+                setTimeout(drawBatteryBbox, 50);
+            } else {
+                img.addEventListener('load', drawBatteryBbox);
+            }
+            // Redraw on window resize
+            window.addEventListener('resize', drawBatteryBbox);
+        }
+
         card.appendChild(imgContainer);
 
         const info = document.createElement('div');
@@ -5314,6 +5405,75 @@ function renderCaptureGallery() {
         actions.style.display = 'flex';
         actions.style.flexDirection = 'column';
         actions.style.gap = '8px';
+
+        // Battery calibration action row
+        const calibRow = document.createElement('div');
+        calibRow.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;';
+
+        const redetectBtn = document.createElement('button');
+        redetectBtn.className = 'btn btn-sm btn-secondary';
+        redetectBtn.style.cssText = 'font-size:0.75rem;padding:3px 8px;';
+        redetectBtn.textContent = '\ud83d\udd0b Re-detect Battery';
+        redetectBtn.title = 'Re-run automatic battery detection on this image';
+        redetectBtn.addEventListener('click', async () => {
+            redetectBtn.disabled = true;
+            redetectBtn.textContent = '\u23f3 Detecting...';
+            try {
+                const resp = await fetch(`${API_BASE}/camera/captures/${capture.id}/auto-calibrate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const d = await resp.json();
+                if (d.auto_calibration && d.auto_calibration.battery_detected) {
+                    const c = Math.round((d.auto_calibration.battery_confidence || 0) * 100);
+                    showToast(`\ud83d\udd0b Battery detected (${c}%)! Calibrated.`, 'success');
+                } else {
+                    showToast('\u26a0\ufe0f No battery found in this image', 'warning');
+                }
+                await loadCameraCaptures();
+            } catch (err) {
+                showToast('Re-detect failed', 'error');
+            } finally {
+                redetectBtn.disabled = false;
+                redetectBtn.textContent = '\ud83d\udd0b Re-detect Battery';
+            }
+        });
+        calibRow.appendChild(redetectBtn);
+
+        if (capture.auto_calibration && capture.auto_calibration.battery_detected) {
+            const adjustBtn = document.createElement('button');
+            adjustBtn.className = 'btn btn-sm';
+            adjustBtn.style.cssText = 'font-size:0.75rem;padding:3px 8px;background:#f59e0b;color:#000;border:none;';
+            adjustBtn.textContent = '\u270f\ufe0f Adjust Box';
+            adjustBtn.title = 'Manually adjust the battery bounding box';
+            adjustBtn.addEventListener('click', () => {
+                openCalibrateModal(capture.id, {
+                    reference_type: 'aa_battery',
+                    ref_width_cm: '1.45',
+                    ref_height_cm: '5.05'
+                });
+            });
+            calibRow.appendChild(adjustBtn);
+
+            // Show cross-validation info if both methods available
+            const cal = capture.auto_calibration;
+            if (cal.ref_measurement && cal.tof_measurement) {
+                const crossInfo = document.createElement('span');
+                crossInfo.style.cssText = 'font-size:0.7rem;color:var(--text-secondary);';
+                const refH = cal.ref_measurement.height_cm;
+                const tofH = cal.tof_measurement.height_cm;
+                if (refH && tofH) {
+                    const diff = Math.abs(refH - tofH);
+                    const pct = Math.round((diff / Math.max(refH, tofH)) * 100);
+                    crossInfo.textContent = `\ud83d\udcca Battery: ${refH}cm | ToF: ${tofH}cm (\u00b1${pct}%)`;
+                    crossInfo.title = `Cross-validation: Battery calibration vs ToF depth measurement`;
+                }
+                calibRow.appendChild(crossInfo);
+            }
+        }
+
+        actions.appendChild(calibRow);
 
         if (capture.analysis_status === 'pending' || capture.analysis_status === 'failed') {
             const controlsRow = document.createElement('div');

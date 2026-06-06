@@ -288,6 +288,7 @@ class CameraCapture(db.Model):
     capture_type = db.Column(db.String(50), default='on_demand')
     analysis_status = db.Column(db.String(50), default='pending')
     analysis_result = db.Column(db.Text)
+    auto_calibration = db.Column(db.Text)  # JSON: auto-detected battery bbox + calibration
     captured_at = db.Column(db.DateTime, default=datetime.utcnow)
     analyzed_at = db.Column(db.DateTime)
 
@@ -301,6 +302,7 @@ class CameraCapture(db.Model):
             'capture_type': self.capture_type,
             'analysis_status': self.analysis_status,
             'analysis_result': json.loads(self.analysis_result) if self.analysis_result else None,
+            'auto_calibration': json.loads(self.auto_calibration) if self.auto_calibration else None,
             'captured_at': self.captured_at.isoformat() if self.captured_at else None,
             'analyzed_at': self.analyzed_at.isoformat() if self.analyzed_at else None
         }
@@ -1658,13 +1660,120 @@ def capture_from_endpoint(endpoint_id):
         endpoint.last_seen = datetime.utcnow()
         db.session.commit()
 
+        # ── Auto-detect AA battery for calibration ───────────────
+        calib_data = None
+        try:
+            from backend.cv_measure import detect_and_calibrate
+            image_path, depth_path = _resolve_capture_paths(capture.filename)
+            calib = detect_and_calibrate(
+                image_path=image_path,
+                rotation=endpoint.rotation,
+                hflip=endpoint.hflip,
+                vflip=endpoint.vflip,
+                depth_path=depth_path
+            )
+            if calib.get('battery_detected'):
+                capture.auto_calibration = json.dumps(calib)
+                db.session.commit()
+                calib_data = calib
+                app.logger.info('Auto-detected battery in capture %d '
+                                '(confidence=%.3f px/cm=%.2f)',
+                                capture.id,
+                                calib.get('battery_confidence', 0),
+                                calib.get('pixels_per_cm', 0))
+        except Exception as exc:
+            app.logger.warning('Battery auto-detection failed for capture '
+                               '%d: %s', capture.id, exc)
+
         return jsonify({
             'success': True,
             'capture': capture.to_dict(),
-            'message': result['message']
+            'message': result['message'],
+            'auto_calibration': calib_data
         }), 201
 
     return jsonify({'success': False, 'error': result['message']}), 500
+
+
+@app.route('/api/camera/captures/<int:capture_id>/auto-calibrate', methods=['POST'])
+def auto_calibrate_capture(capture_id):
+    """Re-run battery auto-detection on an existing capture.
+
+    Optionally accepts a manual bbox override in the request body:
+      {"battery_bbox": [ymin, xmin, ymax, xmax]}  (0-1000 scale)
+    If provided, uses the manual bbox instead of auto-detection.
+    """
+    capture = CameraCapture.query.get_or_404(capture_id)
+    image_path, depth_path = _resolve_capture_paths(capture.filename)
+
+    endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+    rotation = endpoint.rotation if endpoint else 0
+    hflip = endpoint.hflip if endpoint else False
+    vflip = endpoint.vflip if endpoint else False
+
+    req_data = request.json or {}
+    manual_bbox = req_data.get('battery_bbox')
+
+    if manual_bbox:
+        # Manual bbox override — user adjusted the auto-detected box
+        if not isinstance(manual_bbox, list) or len(manual_bbox) != 4:
+            return jsonify({'error': 'battery_bbox must be [ymin, xmin, ymax, xmax]'}), 400
+        try:
+            manual_bbox = [int(v) for v in manual_bbox]
+        except (TypeError, ValueError):
+            return jsonify({'error': 'battery_bbox values must be integers'}), 400
+        if not all(0 <= v <= 1000 for v in manual_bbox):
+            return jsonify({'error': 'battery_bbox values must be 0-1000'}), 400
+
+        # Use the manual bbox with the existing calibration pipeline
+        try:
+            from backend.cv_measure import measure_with_manual_bbox
+            result = measure_with_manual_bbox(
+                image_path=image_path,
+                ref_bbox_norm=manual_bbox,
+                ref_type='aa_battery',
+                rotation=rotation, hflip=hflip, vflip=vflip,
+                depth_path=depth_path
+            )
+            # Build calibration data from manual measurement
+            calib = {
+                'battery_detected': True,
+                'battery_bbox': manual_bbox,
+                'battery_confidence': 1.0,  # manual = full confidence
+                'pixels_per_cm': result.get('pixels_per_cm'),
+                'plant_bbox': result.get('plant_bbox'),
+                'detection_method': 'battery_manual',
+                'ref_measurement': None,
+                'tof_measurement': None,
+            }
+            if result.get('estimated_height_cm'):
+                calib['ref_measurement'] = {
+                    'height_cm': result['estimated_height_cm'],
+                    'width_cm': result.get('estimated_width_cm'),
+                }
+        except Exception as exc:
+            return jsonify({'error': str(exc)}), 500
+    else:
+        # Auto-detect battery
+        try:
+            from backend.cv_measure import detect_and_calibrate
+            calib = detect_and_calibrate(
+                image_path=image_path,
+                rotation=rotation, hflip=hflip, vflip=vflip,
+                depth_path=depth_path
+            )
+        except Exception as exc:
+            return jsonify({'error': str(exc)}), 500
+
+    # Save calibration data
+    capture.auto_calibration = json.dumps(calib)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'auto_calibration': calib,
+        'capture': capture.to_dict()
+    })
 
 
 @app.route('/api/camera/captures', methods=['GET'])

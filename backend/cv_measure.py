@@ -452,6 +452,168 @@ def detect_plant_contour(image, exclude_bbox=None):
                  x, y, w, h, cv2.contourArea(largest))
     return (x, y, w, h)
 
+# ── VLM-based Battery Detection (Jetson Orin AGX) ────────────────
+
+# Jetson Orin AGX endpoint running vLLM with vision model
+VLM_ENDPOINT = os.environ.get(
+    'VLM_ENDPOINT', 'http://10.0.0.30:8000/v1/chat/completions'
+)
+VLM_MODEL = os.environ.get(
+    'VLM_MODEL', 'Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16'
+)
+VLM_TIMEOUT = int(os.environ.get('VLM_TIMEOUT', '30'))
+
+
+def vlm_detect_battery(image):
+    """Detect an AA battery using a Vision Language Model.
+
+    Sends the image to the Jetson Orin AGX running a Qwen3.5 vision model
+    via vLLM's OpenAI-compatible API.  The VLM *understands* what a battery
+    looks like — it doesn't rely on fragile color/shape heuristics.
+
+    Returns the bounding box as (x, y, w, h) in pixels and a confidence
+    score, or (None, 0.0) if detection fails or the VLM is unavailable.
+    """
+    import json
+    import base64
+
+    try:
+        import requests as http_requests
+    except ImportError:
+        logger.warning("requests library not available for VLM detection")
+        return None, 0.0
+
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        logger.warning("cv2/numpy not available for VLM detection")
+        return None, 0.0
+
+    h_img, w_img = image.shape[:2]
+
+    # Encode the image as base64 JPEG
+    try:
+        _, buf = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        image_b64 = base64.b64encode(buf.tobytes()).decode('utf-8')
+    except Exception as exc:
+        logger.error("VLM detect: failed to encode image: %s", exc)
+        return None, 0.0
+
+    prompt = (
+        "Look at this image carefully. Is there an AA battery visible? "
+        "If yes, return ONLY a JSON object with the battery's bounding box "
+        "in pixel coordinates:\n"
+        '{"found": true, "x": <left>, "y": <top>, "width": <w>, "height": <h>, '
+        '"confidence": <0.0 to 1.0>}\n\n'
+        f"The image is {w_img}x{h_img} pixels. "
+        "x and y are the top-left corner of the bounding box. "
+        "width and height are the box dimensions in pixels. "
+        "Be precise — the box should tightly wrap the battery.\n\n"
+        'If no AA battery is visible, return: {"found": false}\n\n'
+        "Return ONLY the JSON, no markdown, no explanation."
+    )
+
+    payload = {
+        "model": VLM_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_b64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.1,
+    }
+
+    try:
+        logger.info("VLM battery detection: sending to %s (model=%s, "
+                     "image=%dx%d)", VLM_ENDPOINT, VLM_MODEL, w_img, h_img)
+
+        resp = http_requests.post(
+            VLM_ENDPOINT,
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=VLM_TIMEOUT
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract content from OpenAI-compatible response
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+
+        # Strip markdown fences if present
+        clean = content.strip()
+        if clean.startswith("```"):
+            lines = clean.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            clean = "\n".join(lines).strip()
+
+        # Handle <think> blocks from Qwen3.5 thinking mode
+        if "<think>" in clean:
+            # Remove everything between <think> and </think>
+            import re
+            clean = re.sub(r'<think>.*?</think>', '', clean,
+                           flags=re.DOTALL).strip()
+
+        result = json.loads(clean)
+
+        if not result.get("found"):
+            logger.info("VLM says no battery found in image")
+            return None, 0.0
+
+        x = int(result.get("x", 0))
+        y = int(result.get("y", 0))
+        w = int(result.get("width", 0))
+        h = int(result.get("height", 0))
+        conf = float(result.get("confidence", 0.8))
+
+        # Sanity checks
+        if w < 5 or h < 5:
+            logger.warning("VLM returned tiny bbox (%d,%d,%d,%d), ignoring",
+                           x, y, w, h)
+            return None, 0.0
+
+        # Clamp to image bounds
+        x = max(0, min(x, w_img - 1))
+        y = max(0, min(y, h_img - 1))
+        w = min(w, w_img - x)
+        h = min(h, h_img - y)
+
+        logger.info("VLM detected battery at (%d,%d,%d,%d) conf=%.2f",
+                     x, y, w, h, conf)
+        return (x, y, w, h), conf
+
+    except http_requests.exceptions.ConnectionError:
+        logger.warning("VLM endpoint unreachable at %s — falling back to "
+                       "OpenCV", VLM_ENDPOINT)
+        return None, 0.0
+    except http_requests.exceptions.Timeout:
+        logger.warning("VLM request timed out after %ds — falling back to "
+                       "OpenCV", VLM_TIMEOUT)
+        return None, 0.0
+    except json.JSONDecodeError as exc:
+        logger.warning("VLM returned non-JSON response: %s (raw: %s)",
+                       exc, content[:300] if 'content' in dir() else '?')
+        return None, 0.0
+    except Exception as exc:
+        logger.warning("VLM detection failed: %s — falling back to OpenCV",
+                       exc)
+        return None, 0.0
+
+
 # ── Automatic AA Battery Detection ───────────────────────────────
 
 def auto_detect_battery(image):
@@ -717,10 +879,12 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
                          depth_path=None):
     """Auto-detect an AA battery and compute calibration data.
 
-    Runs auto_detect_battery() on the image, then:
-      - If found: calculates pixels_per_cm from the bbox vs known dimensions
-      - If ToF depth available: also computes ToF-based measurements for
-        cross-validation
+    Detection priority:
+      1. VLM (Jetson Orin AGX) — vision model that truly "sees" the battery
+      2. OpenCV heuristics — color/shape fallback if VLM is unavailable
+
+    Once found, calculates pixels_per_cm from the bbox vs known AA battery
+    dimensions.  If ToF depth is available, also computes cross-validation.
 
     Returns a dict with battery detection results and calibration data.
     """
@@ -743,8 +907,27 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
 
     h_img, w_img = image.shape[:2]
 
-    # ── Detect battery ───────────────────────────────────────────
-    battery_bbox_px, confidence = auto_detect_battery(image)
+    # ── Detect battery (VLM first, then OpenCV fallback) ─────────
+    detection_method = None
+    battery_bbox_px, confidence = None, 0.0
+
+    # Stage 1: Try VLM (Jetson Orin AGX vision model)
+    try:
+        battery_bbox_px, confidence = vlm_detect_battery(image)
+        if battery_bbox_px is not None:
+            detection_method = 'battery_vlm'
+            logger.info("Battery found via VLM (confidence=%.2f)", confidence)
+    except Exception as exc:
+        logger.warning("VLM detection threw exception: %s", exc)
+
+    # Stage 2: Fall back to OpenCV heuristics
+    if battery_bbox_px is None:
+        logger.info("VLM did not find battery, trying OpenCV fallback...")
+        battery_bbox_px, confidence = auto_detect_battery(image)
+        if battery_bbox_px is not None:
+            detection_method = 'battery_auto'
+            logger.info("Battery found via OpenCV (confidence=%.2f)",
+                         confidence)
 
     if battery_bbox_px is None:
         return result
@@ -770,7 +953,7 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
     if ref_long > 0 and bbox_long > 0:
         px_per_cm = bbox_long / ref_long
         result['pixels_per_cm'] = round(px_per_cm, 2)
-        result['detection_method'] = 'battery_auto'
+        result['detection_method'] = detection_method or 'battery_auto'
 
     # ── Detect plant ─────────────────────────────────────────────
     plant_bbox_px = detect_plant_contour(image, exclude_bbox=battery_bbox_px)

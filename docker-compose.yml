@@ -15,6 +15,9 @@ services:
       - PI_SSH_HOST=10.0.0.228
       - PI_SSH_USER=braindeadpi
       - PI_SSH_PORT=22
+      - VLM_ENDPOINT=http://10.0.0.30:8000/v1/chat/completions
+      - VLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16
+      - VLM_TIMEOUT=45
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro
       - ./logs:/app/logs

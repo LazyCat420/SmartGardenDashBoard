@@ -1602,6 +1602,167 @@ def delete_camera_endpoint(endpoint_id):
     return '', 204
 
 
+@app.route('/api/camera/discover', methods=['POST'])
+def discover_camera_endpoints():
+    """Concurrently scans target subnets for Raspberry Pi cameras and auto-registers them."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import subprocess
+    from backend.camera_service import SSH_OPTS, test_connection as cam_test_connection
+
+    # 1. Determine subnets to scan
+    subnets = set()
+    
+    # helper to parse IP/host and get its /24 prefix
+    def get_prefix(ip_or_host):
+        if not ip_or_host:
+            return None
+        parts = ip_or_host.split('.')
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            return '.'.join(parts[:3]) + '.'
+        try:
+            resolved_ip = socket.gethostbyname(ip_or_host)
+            parts = resolved_ip.split('.')
+            if len(parts) == 4:
+                return '.'.join(parts[:3]) + '.'
+        except Exception:
+            pass
+        return None
+
+    # Check PI_SSH_HOST env
+    env_host = os.environ.get('PI_SSH_HOST')
+    if env_host:
+        for host in env_host.split(','):
+            prefix = get_prefix(host.strip())
+            if prefix:
+                subnets.add(prefix)
+
+    # Check DATABASE_URL host
+    if DATABASE_URL.startswith('postgresql://'):
+        try:
+            # Extract host
+            host_part = DATABASE_URL.split('@')[1].split(':')[0]
+            prefix = get_prefix(host_part)
+            if prefix:
+                subnets.add(prefix)
+        except Exception:
+            pass
+
+    # Check local IP
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('10.255.255.255', 1))
+        local_ip = s.getsockname()[0]
+        s.close()
+        prefix = get_prefix(local_ip)
+        if prefix:
+            subnets.add(prefix)
+    except Exception:
+        pass
+
+    # Fall back to 10.0.0. if nothing was discovered
+    if not subnets:
+        subnets.add('10.0.0.')
+
+    print(f"[smartgarden] Discovery: Target subnets to scan: {list(subnets)}")
+
+    # 2. Get environment SSH parameters
+    ssh_user = os.environ.get('PI_SSH_USER', 'pi')
+    ssh_port = int(os.environ.get('PI_SSH_PORT', 22))
+
+    # 3. Generate candidate IPs
+    candidate_ips = []
+    for prefix in subnets:
+        for i in range(1, 255):
+            candidate_ips.append(prefix + str(i))
+
+    # 4. Port probe: fast check if port is open
+    def probe_port(ip):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        try:
+            res = s.connect_ex((ip, ssh_port))
+            return ip, res == 0
+        except Exception:
+            return ip, False
+        finally:
+            s.close()
+
+    open_ssh_ips = []
+    print(f"[smartgarden] Discovery: Probing port {ssh_port} on {len(candidate_ips)} candidates...")
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        futures = {executor.submit(probe_port, ip): ip for ip in candidate_ips}
+        for future in as_completed(futures):
+            ip, is_open = future.result()
+            if is_open:
+                open_ssh_ips.append(ip)
+
+    print(f"[smartgarden] Discovery: Found SSH open on: {open_ssh_ips}")
+
+    # 5. Connect check and hostname query for open SSH hosts
+    new_endpoints = []
+    existing_hosts = {ep.ssh_host for ep in CameraEndpoint.query.all()}
+
+    def check_pi_camera(ip):
+        res = cam_test_connection(ip, ssh_user, ssh_port)
+        if not res.get('reachable') or not res.get('camera_available'):
+            return None
+        
+        # Try to retrieve hostname
+        hostname = None
+        cmd = ['ssh', *SSH_OPTS, '-p', str(ssh_port), f'{ssh_user}@{ip}', 'hostname']
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                hostname = result.stdout.strip()
+        except Exception:
+            pass
+        
+        return {
+            'ssh_host': ip,
+            'ssh_user': ssh_user,
+            'ssh_port': ssh_port,
+            'hostname': hostname
+        }
+
+    discovered_pis = []
+    if open_ssh_ips:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_pi_camera, ip): ip for ip in open_ssh_ips}
+            for future in as_completed(futures):
+                pi_details = future.result()
+                if pi_details:
+                    discovered_pis.append(pi_details)
+
+    # 6. Save new endpoints to DB
+    added_endpoints = []
+    for pi in discovered_pis:
+        if pi['ssh_host'] in existing_hosts:
+            continue
+        
+        name = pi['hostname'] if pi['hostname'] else f"Camera {pi['ssh_host']}"
+        ep = CameraEndpoint(
+            name=name[:100],
+            ssh_host=pi['ssh_host'],
+            ssh_user=pi['ssh_user'],
+            ssh_port=pi['ssh_port'],
+            capture_command='rpicam-still -o - --width 1920 --height 1080 -t 1000'
+        )
+        db.session.add(ep)
+        added_endpoints.append(ep)
+
+    if added_endpoints:
+        db.session.commit()
+        print(f"[smartgarden] Discovery: Registered {len(added_endpoints)} new camera endpoints.")
+    
+    return jsonify({
+        'status': 'success',
+        'discovered_total': len(discovered_pis),
+        'added_total': len(added_endpoints),
+        'added_endpoints': [ep.to_dict() for ep in added_endpoints]
+    })
+
+
 @app.route('/api/camera/endpoints/<int:endpoint_id>/test', methods=['POST'])
 def test_camera_endpoint(endpoint_id):
     endpoint = CameraEndpoint.query.get_or_404(endpoint_id)
@@ -2240,9 +2401,48 @@ def init_db():
         try:
             db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_width_cm FLOAT'))
             db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_height_cm FLOAT'))
+            db.session.execute(text('ALTER TABLE camera_capture ADD COLUMN IF NOT EXISTS auto_calibration TEXT'))
             db.session.commit()
         except Exception:
             db.session.rollback()
+
+        # Auto-register environment camera if no cameras are configured
+        try:
+            if CameraEndpoint.query.first() is None:
+                ssh_host = os.environ.get('PI_SSH_HOST')
+                if ssh_host:
+                    ssh_user = os.environ.get('PI_SSH_USER', 'pi')
+                    ssh_port = int(os.environ.get('PI_SSH_PORT', 22))
+                    from backend.camera_service import test_connection as cam_test_connection
+                    print(f"[smartgarden] Startup camera check: testing connection to {ssh_user}@{ssh_host}:{ssh_port}...")
+                    res = cam_test_connection(ssh_host, ssh_user, ssh_port)
+                    if res.get('reachable'):
+                        hostname = None
+                        from backend.camera_service import SSH_OPTS
+                        import subprocess
+                        cmd = ['ssh', *SSH_OPTS, '-p', str(ssh_port), f'{ssh_user}@{ssh_host}', 'hostname']
+                        try:
+                            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                            if result.returncode == 0:
+                                hostname = result.stdout.strip()
+                        except Exception:
+                            pass
+
+                        name = hostname if hostname else f"Camera {ssh_host}"
+                        endpoint = CameraEndpoint(
+                            name=name[:100],
+                            ssh_host=ssh_host,
+                            ssh_user=ssh_user,
+                            ssh_port=ssh_port,
+                            capture_command='rpicam-still -o - --width 1920 --height 1080 -t 1000'
+                        )
+                        db.session.add(endpoint)
+                        db.session.commit()
+                        print(f"[smartgarden] Startup camera check: Successfully registered camera '{name}'!")
+                    else:
+                        print(f"[smartgarden] Startup camera check: {ssh_host} not reachable: {res.get('message')}")
+        except Exception as startup_err:
+            print(f"[smartgarden] Startup camera check failed: {startup_err}")
 
         print("Database initialized!")
 

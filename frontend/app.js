@@ -4769,11 +4769,49 @@ function setupCameraButtons() {
     const addBtn = document.getElementById('addCameraEndpointBtn');
     if (addBtn) addBtn.addEventListener('click', showAddCameraEndpointModal);
 
+    const discoverBtn = document.getElementById('discoverCamerasBtn');
+    if (discoverBtn) discoverBtn.addEventListener('click', discoverCameras);
+
     const captureBtn = document.getElementById('captureNowBtn');
     if (captureBtn) captureBtn.addEventListener('click', captureNow);
 
     const scheduleBtn = document.getElementById('addScheduleBtn');
     if (scheduleBtn) scheduleBtn.addEventListener('click', addCaptureSchedule);
+}
+
+async function discoverCameras() {
+    const btn = document.getElementById('discoverCamerasBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '🔍 Scanning...';
+    }
+    showToast('Scanning local subnets for camera endpoints. Please wait...', 'info');
+
+    try {
+        const response = await fetch(`${API_BASE}/camera/discover`, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        if (response.ok && data.status === 'success') {
+            if (data.added_total > 0) {
+                showToast(`🎉 Auto-Discovery successful! Found ${data.discovered_total} camera(s), registered ${data.added_total} new camera(s).`, 'success');
+            } else if (data.discovered_total > 0) {
+                showToast(`🔍 Auto-Discovery: Found ${data.discovered_total} camera(s), but they were already registered.`, 'info');
+            } else {
+                showToast('🔍 Auto-Discovery: No cameras found on the local subnets.', 'warning');
+            }
+            await loadCameraEndpoints();
+        } else {
+            showToast(data.error || 'Failed to auto-discover cameras', 'error');
+        }
+    } catch (error) {
+        showToast('Auto-Discovery failed', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🔍 Auto-Discover';
+        }
+    }
 }
 
 async function loadCameraEndpoints() {

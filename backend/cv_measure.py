@@ -452,8 +452,306 @@ def detect_plant_contour(image, exclude_bbox=None):
                  x, y, w, h, cv2.contourArea(largest))
     return (x, y, w, h)
 
+# ── Automatic AA Battery Detection ───────────────────────────────
+
+def auto_detect_battery(image):
+    """Detect an AA battery in the image using color + shape analysis.
+
+    Multi-stage pipeline:
+      1. Color filter — isolate metallic silver/copper/gold tones,
+         exclude greens (plants) and browns (soil)
+      2. Edge detection on filtered regions
+      3. Contour analysis with aspect ratio (~3.48:1), size, and
+         rectangularity scoring
+
+    Returns the best bounding box as (x, y, w, h) in pixels and a
+    confidence score, or (None, 0.0) if no battery was found.
+    """
+    import cv2
+    import numpy as np
+    import math
+
+    h_img, w_img = image.shape[:2]
+    img_area = h_img * w_img
+
+    # Expected aspect ratio: 5.05 / 1.45 ≈ 3.48
+    EXPECTED_ASPECT = 5.05 / 1.45
+    ASPECT_TOL = 0.35  # ±35% tolerance
+    min_aspect = EXPECTED_ASPECT * (1 - ASPECT_TOL)
+    max_aspect = EXPECTED_ASPECT * (1 + ASPECT_TOL)
+
+    # Expected size range (fraction of image area)
+    # A battery in a 1920×1080 frame is roughly 40-150px wide × 140-500px tall
+    MIN_AREA_FRAC = 0.0003   # ~600 px² in 2M image
+    MAX_AREA_FRAC = 0.04     # ~80000 px²
+    IDEAL_AREA_FRAC = 0.005  # ~10000 px²
+    min_area = img_area * MIN_AREA_FRAC
+    max_area = img_area * MAX_AREA_FRAC
+    ideal_area = img_area * IDEAL_AREA_FRAC
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # ── Stage 1: Color filtering ─────────────────────────────────
+    # Batteries have metallic silver/grey/copper tones.
+    # Silver/grey: low saturation, mid-to-high value
+    lower_silver = np.array([0, 0, 80])
+    upper_silver = np.array([180, 60, 220])
+    mask_silver = cv2.inRange(hsv, lower_silver, upper_silver)
+
+    # Copper/gold top (positive terminal): warm hue, moderate saturation
+    lower_copper = np.array([10, 40, 80])
+    upper_copper = np.array([30, 200, 230])
+    mask_copper = cv2.inRange(hsv, lower_copper, upper_copper)
+
+    # Combine metallic masks
+    mask_metallic = cv2.bitwise_or(mask_silver, mask_copper)
+
+    # Exclude green areas (plants) from the search
+    lower_green = np.array([25, 30, 30])
+    upper_green = np.array([95, 255, 255])
+    mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+    # Exclude dark brown (soil/dirt)
+    lower_brown = np.array([5, 50, 20])
+    upper_brown = np.array([25, 200, 120])
+    mask_brown = cv2.inRange(hsv, lower_brown, upper_brown)
+
+    # Final mask: metallic areas minus green/brown
+    mask_exclude = cv2.bitwise_or(mask_green, mask_brown)
+    mask = cv2.bitwise_and(mask_metallic, cv2.bitwise_not(mask_exclude))
+
+    # Morphological cleanup
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # ── Stage 2: Edge detection on masked region ─────────────────
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Apply mask to grayscale for edge detection
+    gray_masked = cv2.bitwise_and(gray, gray, mask=mask)
+    edges = cv2.Canny(gray_masked, 40, 120)
+
+    # Also run edges on the full grayscale as backup
+    edges_full = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+
+    # Combine: masked edges + full edges within metallic mask
+    edges_combined = cv2.bitwise_or(edges, cv2.bitwise_and(edges_full, mask))
+
+    # Dilate to connect nearby edges
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    edges_combined = cv2.dilate(edges_combined, kernel_dilate, iterations=2)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges_combined = cv2.morphologyEx(edges_combined, cv2.MORPH_CLOSE,
+                                       kernel_close, iterations=1)
+
+    # ── Stage 3: Contour analysis ────────────────────────────────
+    contours, _ = cv2.findContours(edges_combined, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area or area > max_area:
+            continue
+
+        # Minimum bounding rectangle (rotated)
+        rect = cv2.minAreaRect(contour)
+        box_w, box_h = rect[1]
+
+        if box_w < 5 or box_h < 5:
+            continue
+
+        # Ensure height > width for aspect ratio
+        if box_w > box_h:
+            box_w, box_h = box_h, box_w
+
+        aspect = box_h / box_w
+
+        if not (min_aspect <= aspect <= max_aspect):
+            continue
+
+        # Upright bounding rect
+        x, y, w, h = cv2.boundingRect(contour)
+
+        # ── Scoring ──────────────────────────────────────────────
+        # Aspect ratio score (1.0 = perfect match)
+        aspect_diff = abs(aspect - EXPECTED_ASPECT) / EXPECTED_ASPECT
+        aspect_score = max(0.0, 1.0 - aspect_diff)
+
+        # Size score (Gaussian around ideal area)
+        if ideal_area > 0:
+            log_ratio = math.log(area / ideal_area)
+            size_score = math.exp(-0.5 * (log_ratio / 1.0) ** 2)
+        else:
+            size_score = 1.0
+
+        # Rectangularity score (how rectangular is the contour?)
+        rect_area = w * h
+        if rect_area > 0:
+            rectangularity = area / rect_area
+        else:
+            rectangularity = 0
+        rect_score = min(1.0, rectangularity / 0.7)  # Normalize: 0.7+ = 1.0
+
+        # Metallic pixel density within the bounding box
+        roi_mask = mask[y:y+h, x:x+w]
+        if roi_mask.size > 0:
+            metallic_ratio = np.count_nonzero(roi_mask) / roi_mask.size
+        else:
+            metallic_ratio = 0
+        metallic_score = min(1.0, metallic_ratio / 0.3)  # 30%+ metallic = 1.0
+
+        # Combined score: weighted combination
+        score = (aspect_score * 0.35 +
+                 size_score * 0.20 +
+                 rect_score * 0.20 +
+                 metallic_score * 0.25)
+
+        candidates.append({
+            'bbox': (x, y, w, h),
+            'score': score,
+            'area': area,
+            'aspect': aspect,
+            'aspect_score': aspect_score,
+            'size_score': size_score,
+            'rect_score': rect_score,
+            'metallic_score': metallic_score,
+        })
+
+        logger.debug("Battery candidate: bbox=(%d,%d,%d,%d) area=%d "
+                     "aspect=%.2f scores=[asp=%.2f sz=%.2f rect=%.2f "
+                     "metal=%.2f] total=%.3f",
+                     x, y, w, h, area, aspect,
+                     aspect_score, size_score, rect_score,
+                     metallic_score, score)
+
+    if not candidates:
+        logger.info("No battery candidates found (%d contours checked, "
+                     "area range %.0f-%.0f, aspect range %.2f-%.2f)",
+                     len(contours), min_area, max_area,
+                     min_aspect, max_aspect)
+        return None, 0.0
+
+    # Return the best candidate
+    candidates.sort(key=lambda c: c['score'], reverse=True)
+    best = candidates[0]
+
+    # Minimum confidence threshold — avoid false positives
+    if best['score'] < 0.25:
+        logger.info("Best battery candidate score %.3f below threshold 0.25, "
+                     "rejecting", best['score'])
+        return None, 0.0
+
+    logger.info("Battery detected at %s (score=%.3f aspect=%.2f area=%d, "
+                 "from %d candidates)",
+                 best['bbox'], best['score'], best['aspect'],
+                 best['area'], len(candidates))
+    return best['bbox'], best['score']
+
+
+def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
+                         depth_path=None):
+    """Auto-detect an AA battery and compute calibration data.
+
+    Runs auto_detect_battery() on the image, then:
+      - If found: calculates pixels_per_cm from the bbox vs known dimensions
+      - If ToF depth available: also computes ToF-based measurements for
+        cross-validation
+
+    Returns a dict with battery detection results and calibration data.
+    """
+    result = {
+        'battery_detected': False,
+        'battery_bbox': None,
+        'battery_confidence': 0.0,
+        'pixels_per_cm': None,
+        'plant_bbox': None,
+        'ref_measurement': None,
+        'tof_measurement': None,
+        'detection_method': None,
+    }
+
+    try:
+        image = _load_image(image_path, rotation, hflip, vflip)
+    except (ValueError, FileNotFoundError) as exc:
+        result['error'] = str(exc)
+        return result
+
+    h_img, w_img = image.shape[:2]
+
+    # ── Detect battery ───────────────────────────────────────────
+    battery_bbox_px, confidence = auto_detect_battery(image)
+
+    if battery_bbox_px is None:
+        return result
+
+    bx, by, bw, bh = battery_bbox_px
+    result['battery_detected'] = True
+    result['battery_confidence'] = round(confidence, 3)
+    result['battery_bbox'] = [
+        int(by / h_img * 1000),           # ymin
+        int(bx / w_img * 1000),           # xmin
+        int((by + bh) / h_img * 1000),    # ymax
+        int((bx + bw) / w_img * 1000),    # xmax
+    ]
+
+    # ── Calculate px/cm from battery ─────────────────────────────
+    known = KNOWN_DIMENSIONS['aa_battery']
+    # Match longer bbox dim to longer real dim
+    bbox_long = max(bw, bh)
+    bbox_short = min(bw, bh)
+    ref_long = max(known['height_cm'], known['width_cm'])
+    ref_short = min(known['height_cm'], known['width_cm'])
+
+    if ref_long > 0 and bbox_long > 0:
+        px_per_cm = bbox_long / ref_long
+        result['pixels_per_cm'] = round(px_per_cm, 2)
+        result['detection_method'] = 'battery_auto'
+
+    # ── Detect plant ─────────────────────────────────────────────
+    plant_bbox_px = detect_plant_contour(image, exclude_bbox=battery_bbox_px)
+
+    if plant_bbox_px:
+        px, py, pw, ph = plant_bbox_px
+        result['plant_bbox'] = [
+            int(py / h_img * 1000),
+            int(px / w_img * 1000),
+            int((py + ph) / h_img * 1000),
+            int((px + pw) / w_img * 1000),
+        ]
+
+        # ── Battery-based plant measurement ──────────────────────
+        if result['pixels_per_cm'] and result['pixels_per_cm'] > 0:
+            result['ref_measurement'] = {
+                'height_cm': round(ph / result['pixels_per_cm'], 1),
+                'width_cm': round(pw / result['pixels_per_cm'], 1),
+            }
+
+    # ── ToF cross-validation ─────────────────────────────────────
+    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+
+    if tof_depth is not None and plant_bbox_px:
+        px, py, pw, ph = plant_bbox_px
+        cx = min(px + pw // 2, w_img - 1)
+        cy = min(py + ph // 2, h_img - 1)
+        distance_mm = tof_depth[cy, cx]
+
+        if 0 < distance_mm < 6000:
+            w_cm, h_cm = calculate_physical_size(
+                pw, ph, distance_mm, img_width=w_img, img_height=h_img
+            )
+            result['tof_measurement'] = {
+                'height_cm': h_cm,
+                'width_cm': w_cm,
+                'distance_mm': round(float(distance_mm), 1),
+            }
+
+    return result
+
 
 # ── Main measurement orchestrator ────────────────────────────────
+
 
 def measure_objects(image_path, ref_type=None,
                     ref_width_cm=None, ref_height_cm=None,

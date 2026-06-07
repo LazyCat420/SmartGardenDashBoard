@@ -86,20 +86,19 @@ def _get_yolo_model():
 
 # ── ToF Depth Loader ─────────────────────────────────────────────
 
-def load_tof_depth_grid(depth_path, target_shape=(1080, 1920), rotation=0, hflip=False, vflip=False):
+def load_tof_depth_grid(depth_path, target_shape=(1080, 1920), rotation=0, hflip=False, vflip=False,
+                        offset_x_mm=None, offset_y_mm=None, distance_offset_mm=None):
     """
-    Load physical ToF depth map in millimeters.
-    
-    Reads the depth.npy array, optionally applies confidence filtering
-    from the companion confidence.npy file, scales to match the RGB
-    image size, and returns it as a numpy array in millimeters.
+    Load physical ToF depth map and align it to the RGB camera plane in millimeters
+    using 3D pinhole camera projection and distance-dependent parallax correction.
     
     Returns:
-        numpy.ndarray of depth in millimeters, sized to target_shape
+        numpy.ndarray of depth in millimeters, aligned and sized to target_shape
         or None if loading fails.
     """
     import numpy as np
     import cv2
+    import math
     
     if not depth_path or not os.path.exists(depth_path):
         return None
@@ -108,11 +107,8 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920), rotation=0, hflip
         depth_buf = np.load(depth_path)
         
         # ── Load and apply confidence filter if available ────────
-        # The updated capture_rgbd.py saves confidence.npy alongside
-        # depth.npy.  Apply it here to zero out unreliable pixels.
         conf_path = depth_path.replace('_depth.npy', '_confidence.npy')
         if not os.path.exists(conf_path):
-            # Also check for non-suffixed companion (Pi-side naming)
             conf_path_alt = os.path.join(
                 os.path.dirname(depth_path), 'confidence.npy'
             )
@@ -125,56 +121,136 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920), rotation=0, hflip
             try:
                 conf_buf = np.load(conf_path)
                 if conf_buf.shape == depth_buf.shape:
-                    low_conf = conf_buf < 30  # Same threshold as capture
+                    low_conf = conf_buf < 30
                     zeroed = int(np.sum(low_conf))
                     if zeroed > 0:
                         depth_buf[low_conf] = 0
-                        logger.info("Confidence filter applied: zeroed %d/%d "
-                                    "low-confidence pixels (%.1f%%)",
-                                    zeroed, depth_buf.size,
-                                    100 * zeroed / depth_buf.size)
-                else:
-                    logger.warning("Confidence shape %s doesn't match depth "
-                                   "shape %s — skipping filter",
-                                   conf_buf.shape, depth_buf.shape)
+                        logger.info("Confidence filter applied: zeroed %d/%d low-confidence pixels (%.1f%%)",
+                                    zeroed, depth_buf.size, 100 * zeroed / depth_buf.size)
             except Exception as conf_exc:
                 logger.warning("Failed to load confidence map: %s", conf_exc)
 
-        # Diagnostic logging — helps verify ToF Near Mode is working
+        # Diagnostic logging
         valid = depth_buf[depth_buf > 0]
-        if valid.size > 0:
-            logger.info("ToF depth loaded: shape=%s, min=%.0fmm, max=%.0fmm, "
-                        "mean=%.0fmm, valid=%d/%d (%.1f%%)",
-                        depth_buf.shape, valid.min(), valid.max(), valid.mean(),
-                        valid.size, depth_buf.size,
-                        100 * valid.size / depth_buf.size)
-        else:
-            logger.warning("ToF depth loaded but ALL values are zero/invalid! "
-                          "shape=%s — sensor may be saturated or misconfigured",
-                          depth_buf.shape)
+        if valid.size == 0:
+            logger.warning("ToF depth loaded but ALL values are zero/invalid!")
             return None
-        
-        # Apply same flips/rotations as RGB camera
+
+        # Fallback defaults for offsets if not provided
+        if offset_x_mm is None:
+            offset_x_mm = 0.0
+        if offset_y_mm is None:
+            offset_y_mm = 20.0
+        if distance_offset_mm is None:
+            distance_offset_mm = 0.0
+
+        # ── 3D-to-2D Physical ToF-to-RGB Alignment ──────────────────
+        H_tof, W_tof = depth_buf.shape
+        H_rgb, W_rgb = target_shape
+
+        # ToF Camera Intrinsics (ArduCam ToF: HFOV ~58.5°, VFOV ~45.6°)
+        fx_tof = (W_tof / 2.0) / math.tan(math.radians(58.5) / 2.0)
+        fy_tof = (H_tof / 2.0) / math.tan(math.radians(45.6) / 2.0)
+        cx_tof = (W_tof - 1) / 2.0
+        cy_tof = (H_tof - 1) / 2.0
+
+        # RGB Camera Intrinsics (IMX708 Wide: HFOV ~102°, VFOV ~67°)
+        fx_rgb = (W_rgb / 2.0) / math.tan(math.radians(102.0) / 2.0)
+        fy_rgb = (H_rgb / 2.0) / math.tan(math.radians(67.0) / 2.0)
+        cx_rgb = (W_rgb - 1) / 2.0
+        cy_rgb = (H_rgb - 1) / 2.0
+
+        # Project onto a smaller aligned grid first to maintain density and avoid holes,
+        # then scale up to the final size with masked interpolation.
+        scale = 4.0
+        H_small = int(H_rgb / scale)
+        W_small = int(W_rgb / scale)
+        small_aligned = np.zeros((H_small, W_small), dtype=np.float32)
+
+        # Scaled RGB Intrinsics
+        fx_rgb_s = fx_rgb / scale
+        fy_rgb_s = fy_rgb / scale
+        cx_rgb_s = cx_rgb / scale
+        cy_rgb_s = cy_rgb / scale
+
+        # Vectorized projection
+        c_coords, r_coords = np.meshgrid(np.arange(W_tof), np.arange(H_tof))
+        flat_depth = depth_buf.flatten()
+        valid_mask = flat_depth > 0
+        Z = flat_depth[valid_mask]
+
+        if Z.size > 0:
+            c = c_coords.flatten()[valid_mask]
+            r = r_coords.flatten()[valid_mask]
+
+            # 1. Backproject ToF pixel to 3D space
+            X_tof = (c - cx_tof) * Z / fx_tof
+            Y_tof = (r - cy_tof) * Z / fy_tof
+
+            # 2. Shift coordinates to RGB coordinate frame
+            X_rgb = X_tof + offset_x_mm
+            Y_rgb = Y_tof + offset_y_mm
+            Z_rgb = Z + distance_offset_mm
+
+            # Filter points with negative depth
+            valid_z = Z_rgb > 0
+            X_rgb = X_rgb[valid_z]
+            Y_rgb = Y_rgb[valid_z]
+            Z_rgb = Z_rgb[valid_z]
+
+            if Z_rgb.size > 0:
+                # 3. Project 3D points onto scaled RGB plane
+                u_s = X_rgb * fx_rgb_s / Z_rgb + cx_rgb_s
+                v_s = Y_rgb * fy_rgb_s / Z_rgb + cy_rgb_s
+
+                u_idx = np.round(u_s).astype(np.int32)
+                v_idx = np.round(v_s).astype(np.int32)
+
+                # Filter out-of-bounds projected pixels
+                in_bounds = (u_idx >= 0) & (u_idx < W_small) & (v_idx >= 0) & (v_idx < H_small)
+                u_idx = u_idx[in_bounds]
+                v_idx = v_idx[in_bounds]
+                Z_rgb = Z_rgb[in_bounds]
+
+                if Z_rgb.size > 0:
+                    # Sort by depth descending (painter's algorithm: closer overwrite further)
+                    sort_idx = np.argsort(Z_rgb)[::-1]
+                    small_aligned[v_idx[sort_idx], u_idx[sort_idx]] = Z_rgb[sort_idx]
+
+        # Fill single-pixel gaps using morphological dilation on the non-zero pixels
+        dilated = small_aligned.copy()
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        for _ in range(2):
+            dil_step = cv2.dilate(dilated, kernel)
+            dilated = np.where(dilated == 0, dil_step, dilated)
+        small_aligned = dilated
+
+        # Masked Bilinear Interpolation to upscale to 1080x1920
+        # Prevents positive values from blending down to zero at boundaries
+        mask = (small_aligned > 0).astype(np.float32)
+        resized_depth = cv2.resize(small_aligned, (W_rgb, H_rgb), interpolation=cv2.INTER_LINEAR)
+        resized_mask = cv2.resize(mask, (W_rgb, H_rgb), interpolation=cv2.INTER_LINEAR)
+
+        depth_resized = np.zeros_like(resized_depth)
+        valid_mask_resized = resized_mask > 0.01
+        depth_resized[valid_mask_resized] = resized_depth[valid_mask_resized] / resized_mask[valid_mask_resized]
+
+        # Apply flips/rotations to the final aligned grid
         if hflip:
-            depth_buf = cv2.flip(depth_buf, 1)
+            depth_resized = cv2.flip(depth_resized, 1)
         if vflip:
-            depth_buf = cv2.flip(depth_buf, 0)
+            depth_resized = cv2.flip(depth_resized, 0)
 
         if rotation == 90:
-            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_90_CLOCKWISE)
+            depth_resized = cv2.rotate(depth_resized, cv2.ROTATE_90_CLOCKWISE)
         elif rotation == 180:
-            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_180)
+            depth_resized = cv2.rotate(depth_resized, cv2.ROTATE_180)
         elif rotation == 270:
-            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            depth_resized = cv2.rotate(depth_resized, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        # ToF array is usually 240x180. Resize to match RGB (1920x1080)
-        # INTER_NEAREST to avoid interpolating invalid edge depths,
-        # but INTER_LINEAR gives smoother depth maps for bounding boxes.
-        depth_resized = cv2.resize(depth_buf, (target_shape[1], target_shape[0]), 
-                                   interpolation=cv2.INTER_LINEAR)
         return depth_resized
     except Exception as exc:
-        logger.error("Failed to load ToF depth map: %s", exc)
+        logger.error("Failed to load and align ToF depth map: %s", exc)
         return None
 
 
@@ -939,7 +1015,7 @@ def _score_battery_contours(edges, mask, image,
 
 
 def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
-                         depth_path=None):
+                         depth_path=None, offset_x_mm=None, offset_y_mm=None, distance_offset_mm=None):
     """Auto-detect an AA battery and compute calibration data.
 
     Detection priority:
@@ -1043,7 +1119,10 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
         target_shape=(h_img, w_img),
         rotation=rotation,
         hflip=hflip,
-        vflip=vflip
+        vflip=vflip,
+        offset_x_mm=offset_x_mm,
+        offset_y_mm=offset_y_mm,
+        distance_offset_mm=distance_offset_mm
     )
 
     if tof_depth is not None and plant_bbox_px:
@@ -1071,7 +1150,7 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
 def measure_objects(image_path, ref_type=None,
                     ref_width_cm=None, ref_height_cm=None,
                     rotation=0, hflip=False, vflip=False,
-                    depth_path=None):
+                    depth_path=None, offset_x_mm=None, offset_y_mm=None, distance_offset_mm=None):
     """
     Detect plant, and compute real-world measurements using ToF data.
 
@@ -1161,7 +1240,10 @@ def measure_objects(image_path, ref_type=None,
         target_shape=(h_img, w_img),
         rotation=rotation,
         hflip=hflip,
-        vflip=vflip
+        vflip=vflip,
+        offset_x_mm=offset_x_mm,
+        offset_y_mm=offset_y_mm,
+        distance_offset_mm=distance_offset_mm
     )
     
     # ── ToF Math Strategy ──────────────────────────────────────────
@@ -1226,7 +1308,7 @@ def measure_objects(image_path, ref_type=None,
 def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
                               ref_width_cm=None, ref_height_cm=None,
                               rotation=0, hflip=False, vflip=False,
-                              depth_path=None):
+                              depth_path=None, offset_x_mm=None, offset_y_mm=None, distance_offset_mm=None):
     """
     Measure using a manually-drawn bounding box.
 
@@ -1293,7 +1375,10 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
         target_shape=(h_img, w_img),
         rotation=rotation,
         hflip=hflip,
-        vflip=vflip
+        vflip=vflip,
+        offset_x_mm=offset_x_mm,
+        offset_y_mm=offset_y_mm,
+        distance_offset_mm=distance_offset_mm
     )
 
     if has_ref_dims:

@@ -258,6 +258,9 @@ class CameraEndpoint(db.Model):
     rotation = db.Column(db.Integer, default=0)  # 0, 90, 180, 270
     hflip = db.Column(db.Boolean, default=False)
     vflip = db.Column(db.Boolean, default=False)
+    tof_vertical_offset_mm = db.Column(db.Float, default=20.0)
+    tof_horizontal_offset_mm = db.Column(db.Float, default=0.0)
+    tof_distance_offset_mm = db.Column(db.Float, default=0.0)
     last_seen = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -273,6 +276,9 @@ class CameraEndpoint(db.Model):
             'rotation': self.rotation,
             'hflip': self.hflip,
             'vflip': self.vflip,
+            'tof_vertical_offset_mm': self.tof_vertical_offset_mm,
+            'tof_horizontal_offset_mm': self.tof_horizontal_offset_mm,
+            'tof_distance_offset_mm': self.tof_distance_offset_mm,
             'last_seen': self.last_seen.isoformat() if self.last_seen else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'capture_count': len(self.captures)
@@ -1606,7 +1612,10 @@ def create_camera_endpoint():
             'rpicam-still -o - --width 1920 --height 1080 -t 1000')[:500],
         rotation=int(data.get('rotation', 0)),
         hflip=bool(data.get('hflip', False)),
-        vflip=bool(data.get('vflip', False))
+        vflip=bool(data.get('vflip', False)),
+        tof_vertical_offset_mm=float(data.get('tof_vertical_offset_mm', 20.0)),
+        tof_horizontal_offset_mm=float(data.get('tof_horizontal_offset_mm', 0.0)),
+        tof_distance_offset_mm=float(data.get('tof_distance_offset_mm', 0.0))
     )
     db.session.add(endpoint)
     db.session.commit()
@@ -1636,6 +1645,12 @@ def update_camera_endpoint(endpoint_id):
         endpoint.hflip = bool(data['hflip'])
     if 'vflip' in data:
         endpoint.vflip = bool(data['vflip'])
+    if 'tof_vertical_offset_mm' in data:
+        endpoint.tof_vertical_offset_mm = float(data['tof_vertical_offset_mm']) if data['tof_vertical_offset_mm'] is not None else 20.0
+    if 'tof_horizontal_offset_mm' in data:
+        endpoint.tof_horizontal_offset_mm = float(data['tof_horizontal_offset_mm']) if data['tof_horizontal_offset_mm'] is not None else 0.0
+    if 'tof_distance_offset_mm' in data:
+        endpoint.tof_distance_offset_mm = float(data['tof_distance_offset_mm']) if data['tof_distance_offset_mm'] is not None else 0.0
 
     db.session.commit()
     return jsonify(endpoint.to_dict())
@@ -1878,7 +1893,10 @@ def capture_from_endpoint(endpoint_id):
                 rotation=endpoint.rotation,
                 hflip=endpoint.hflip,
                 vflip=endpoint.vflip,
-                depth_path=depth_path
+                depth_path=depth_path,
+                offset_x_mm=endpoint.tof_horizontal_offset_mm,
+                offset_y_mm=endpoint.tof_vertical_offset_mm,
+                distance_offset_mm=endpoint.tof_distance_offset_mm
             )
             if calib.get('battery_detected'):
                 capture.auto_calibration = json.dumps(calib)
@@ -1951,7 +1969,10 @@ def auto_calibrate_capture(capture_id):
                 ref_bbox_norm=manual_bbox,
                 ref_type='aa_battery',
                 rotation=rotation, hflip=hflip, vflip=vflip,
-                depth_path=depth_path
+                depth_path=depth_path,
+                offset_x_mm=endpoint.tof_horizontal_offset_mm if endpoint else None,
+                offset_y_mm=endpoint.tof_vertical_offset_mm if endpoint else None,
+                distance_offset_mm=endpoint.tof_distance_offset_mm if endpoint else None
             )
             # Build calibration data from manual measurement
             calib = {
@@ -1982,7 +2003,10 @@ def auto_calibrate_capture(capture_id):
             calib = detect_and_calibrate(
                 image_path=image_path,
                 rotation=rotation, hflip=hflip, vflip=vflip,
-                depth_path=depth_path
+                depth_path=depth_path,
+                offset_x_mm=endpoint.tof_horizontal_offset_mm if endpoint else None,
+                offset_y_mm=endpoint.tof_vertical_offset_mm if endpoint else None,
+                distance_offset_mm=endpoint.tof_distance_offset_mm if endpoint else None
             )
         except Exception as exc:
             app.logger.exception('Auto-calibrate failed for capture %d',
@@ -2260,7 +2284,10 @@ def analyze_capture(capture_id):
         ref_width_cm=ref_width_cm,
         ref_height_cm=ref_height_cm,
         reference_type=ref_type or ('plant_pot' if (db_ref_width_cm or db_ref_height_cm) else None),
-        depth_path=depth_path
+        depth_path=depth_path,
+        offset_x_mm=endpoint.tof_horizontal_offset_mm if endpoint else None,
+        offset_y_mm=endpoint.tof_vertical_offset_mm if endpoint else None,
+        distance_offset_mm=endpoint.tof_distance_offset_mm if endpoint else None
     )
 
     if result['success']:
@@ -2368,6 +2395,9 @@ def measure_capture(capture_id):
             hflip=hflip,
             vflip=vflip,
             depth_path=depth_path,
+            offset_x_mm=endpoint.tof_horizontal_offset_mm if endpoint else None,
+            offset_y_mm=endpoint.tof_vertical_offset_mm if endpoint else None,
+            distance_offset_mm=endpoint.tof_distance_offset_mm if endpoint else None
         )
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
@@ -2449,6 +2479,9 @@ def calibrate_capture(capture_id):
             hflip=hflip,
             vflip=vflip,
             depth_path=depth_path,
+            offset_x_mm=endpoint.tof_horizontal_offset_mm if endpoint else None,
+            offset_y_mm=endpoint.tof_vertical_offset_mm if endpoint else None,
+            distance_offset_mm=endpoint.tof_distance_offset_mm if endpoint else None
         )
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
@@ -2510,6 +2543,9 @@ def init_db():
             db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_width_cm FLOAT'))
             db.session.execute(text('ALTER TABLE plant ADD COLUMN IF NOT EXISTS ref_height_cm FLOAT'))
             db.session.execute(text('ALTER TABLE camera_capture ADD COLUMN IF NOT EXISTS auto_calibration TEXT'))
+            db.session.execute(text('ALTER TABLE camera_endpoint ADD COLUMN IF NOT EXISTS tof_vertical_offset_mm FLOAT'))
+            db.session.execute(text('ALTER TABLE camera_endpoint ADD COLUMN IF NOT EXISTS tof_horizontal_offset_mm FLOAT'))
+            db.session.execute(text('ALTER TABLE camera_endpoint ADD COLUMN IF NOT EXISTS tof_distance_offset_mm FLOAT'))
             db.session.commit()
         except Exception:
             db.session.rollback()

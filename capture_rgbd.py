@@ -94,6 +94,15 @@ def _open_camera(cam):
 
 
 def main():
+    import os
+    # Delete stale files to prevent copying back old data on failure
+    for f in ['image.jpg', 'depth.npy', 'confidence.npy']:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except Exception as e:
+            print(f"Warning: Failed to delete stale file {f}: {e}")
+
     print("Capturing RGB picture via rpicam-still...")
     try:
         subprocess.run(
@@ -103,7 +112,8 @@ def main():
             timeout=15
         )
     except Exception as e:
-        print("Warning: RGB capture failed:", e)
+        print("Error: RGB capture failed:", e, file=sys.stderr)
+        sys.exit(1)
 
     print("Capturing ToF depth map...")
 

@@ -103,6 +103,7 @@ def main():
         except Exception as e:
             print(f"Warning: Failed to delete stale file {f}: {e}")
 
+    rgb_failed = False
     print("Capturing RGB picture via rpicam-still...")
     try:
         subprocess.run(
@@ -113,7 +114,8 @@ def main():
         )
     except Exception as e:
         print("Error: RGB capture failed:", e, file=sys.stderr)
-        sys.exit(1)
+        print("Proceeding in ToF-only mode; will generate fallback RGB image from ToF data.")
+        rgb_failed = True
 
     print("Capturing ToF depth map...")
 
@@ -216,9 +218,41 @@ def main():
         # Save confidence map for backend diagnostics
         np.save('confidence.npy', conf_median)
         print(f"Saved confidence.npy with shape {conf_median.shape}")
+
+        if rgb_failed:
+            try:
+                from PIL import Image
+                c_min = conf_median.min()
+                c_max = conf_median.max()
+                if c_max > c_min:
+                    conf_norm = ((conf_median - c_min) / (c_max - c_min) * 255.0).astype(np.uint8)
+                else:
+                    conf_norm = np.zeros_like(conf_median, dtype=np.uint8)
+                img = Image.fromarray(conf_norm, mode='L')
+                img = img.resize((1920, 1080), Image.Resampling.LANCZOS)
+                img.save('image.jpg')
+                print("Generated fallback image.jpg from ToF confidence map.")
+            except Exception as ex:
+                print(f"Error generating fallback image from confidence map: {ex}")
     else:
         print("Warning: No confidence data available — depth map is unfiltered.")
         print("  This may cause noisy/saturated pixels to appear as invalid.")
+
+        if rgb_failed:
+            try:
+                from PIL import Image
+                d_min = depth_median.min()
+                d_max = depth_median.max()
+                if d_max > d_min:
+                    depth_norm = (255.0 - ((depth_median - d_min) / (d_max - d_min) * 255.0)).astype(np.uint8)
+                else:
+                    depth_norm = np.zeros_like(depth_median, dtype=np.uint8)
+                img = Image.fromarray(depth_norm, mode='L')
+                img = img.resize((1920, 1080), Image.Resampling.LANCZOS)
+                img.save('image.jpg')
+                print("Generated fallback image.jpg from ToF depth map.")
+            except Exception as ex:
+                print(f"Error generating fallback image from depth map: {ex}")
 
     # Convert to millimeters (ArduCam outputs meters as float32)
     # Check if values seem to be in meters (all < 10) vs already in mm
@@ -255,6 +289,16 @@ def main():
 
     np.save('depth.npy', depth_mm)
     print(f"Saved depth.npy with shape {depth_mm.shape}")
+
+    # Final sanity check: ensure image.jpg is created so scp does not fail
+    if rgb_failed and not os.path.exists('image.jpg'):
+        try:
+            from PIL import Image
+            img = Image.new('RGB', (1920, 1080), color='black')
+            img.save('image.jpg')
+            print("Created a blank fallback image.jpg as final resort.")
+        except Exception as ex:
+            print(f"Error creating blank fallback image: {ex}")
 
 
 if __name__ == '__main__':

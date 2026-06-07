@@ -2117,22 +2117,45 @@ def get_capture_depth(capture_id):
 
         # Clamp to valid ToF range (0-6000mm) and normalize to 0-255
         depth_clamped = np.clip(depth, 0, 6000).astype(np.float32)
-        valid = depth_clamped > 0
-        if np.any(valid):
-            d_min = depth_clamped[valid].min()
-            d_max = depth_clamped[valid].max()
+        valid_mask = depth_clamped > 0
+
+        if np.any(valid_mask):
+            d_min = depth_clamped[valid_mask].min()
+            d_max = depth_clamped[valid_mask].max()
             if d_max > d_min:
                 depth_norm = ((depth_clamped - d_min) / (d_max - d_min) * 255).astype(np.uint8)
             else:
-                depth_norm = np.zeros_like(depth_clamped, dtype=np.uint8)
+                depth_norm = np.full_like(depth_clamped, 128, dtype=np.uint8)
+
+            # Invert so closer = warm (red), farther = cool (blue)
+            depth_norm = 255 - depth_norm
+
+            # Use TURBO colormap for better perceptual uniformity
+            heatmap = cv2.applyColorMap(depth_norm, cv2.COLORMAP_TURBO)
+
+            # Render invalid (zero) pixels as BLACK instead of a
+            # misleading color — prevents all-red when data is sparse
+            heatmap[~valid_mask] = (0, 0, 0)
         else:
-            depth_norm = np.zeros_like(depth_clamped, dtype=np.uint8)
+            # ALL depth values are zero/invalid — render a clear
+            # "No Depth Data" placeholder instead of misleading red
+            h, w = depth_clamped.shape[:2]
+            heatmap = np.zeros((h, w, 3), dtype=np.uint8)
+            # Draw text warning on the placeholder
+            target_h, target_w = 1080, 1920
+            heatmap = cv2.resize(heatmap, (target_w, target_h))
+            cv2.putText(heatmap, 'No Depth Data', (target_w // 2 - 300, target_h // 2 - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 100, 255), 3, cv2.LINE_AA)
+            cv2.putText(heatmap, 'ToF sensor returned all zeros — check placement & lighting',
+                        (target_w // 2 - 520, target_h // 2 + 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2, cv2.LINE_AA)
 
-        # Invert so closer = warm (red), farther = cool (blue)
-        depth_norm = 255 - depth_norm
-
-        # Apply JET colormap for a nice thermal look
-        heatmap = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
+            _, buf = cv2.imencode('.jpg', heatmap, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return send_file(
+                io.BytesIO(buf.tobytes()),
+                mimetype='image/jpeg',
+                download_name=f'depth_{capture_id}.jpg'
+            )
 
         # Resize to match RGB image dimensions (1920x1080) for overlay
         heatmap_resized = cv2.resize(heatmap, (1920, 1080), interpolation=cv2.INTER_LINEAR)

@@ -5489,7 +5489,8 @@ function renderCaptureGallery() {
                 openCalibrateModal(capture.id, {
                     reference_type: 'aa_battery',
                     ref_width_cm: '1.45',
-                    ref_height_cm: '5.05'
+                    ref_height_cm: '5.05',
+                    is_adjust_battery: true
                 });
             });
             calibRow.appendChild(adjustBtn);
@@ -5949,29 +5950,49 @@ async function submitCalibration(captureId, box, options) {
     const ymax = Math.round(Math.max(box.y1, box.y2) * 1000);
     const xmax = Math.round(Math.max(box.x1, box.x2) * 1000);
 
-    showToast('📐 Calibrating with manual bounding box...', 'info');
+    const isAdjustBattery = !!options.is_adjust_battery;
+    const url = isAdjustBattery
+        ? `${API_BASE}/camera/captures/${captureId}/auto-calibrate`
+        : `${API_BASE}/camera/captures/${captureId}/calibrate`;
+
+    const body = isAdjustBattery
+        ? { battery_bbox: [ymin, xmin, ymax, xmax] }
+        : {
+            reference_bbox: [ymin, xmin, ymax, xmax],
+            reference_type: options.reference_type,
+            ref_width_cm: options.ref_width_cm,
+            ref_height_cm: options.ref_height_cm,
+        };
+
+    const toastMsg = isAdjustBattery
+        ? '📐 Calibrating battery with manual bounding box...'
+        : '📐 Calibrating with manual bounding box...';
+
+    showToast(toastMsg, 'info');
 
     try {
-        const response = await fetch(`${API_BASE}/camera/captures/${captureId}/calibrate`, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                reference_bbox: [ymin, xmin, ymax, xmax],
-                reference_type: options.reference_type,
-                ref_width_cm: options.ref_width_cm,
-                ref_height_cm: options.ref_height_cm,
-            })
+            body: JSON.stringify(body)
         });
         const data = await response.json();
         if (data.success) {
-            const height = data.estimated_height_cm;
-            const width = data.estimated_width_cm;
             let msg = '📐 Calibration complete!';
+            const cal = isAdjustBattery ? data.auto_calibration : data;
+            const height = cal.estimated_height_cm || (cal.ref_measurement ? cal.ref_measurement.height_cm : null);
+            const width = cal.estimated_width_cm || (cal.ref_measurement ? cal.ref_measurement.width_cm : null);
             if (height || width) {
                 msg += ` Plant: ${height || '?'}cm H \u00d7 ${width || '?'}cm W`;
             }
             showToast(msg, 'success');
-            viewMeasurementResults(captureId, data);
+            
+            if (isAdjustBattery) {
+                await loadCameraCaptures();
+                closeModal();
+            } else {
+                viewMeasurementResults(captureId, data);
+            }
         } else {
             showToast('Calibration failed: ' + (data.error || 'Unknown error'), 'error');
         }
@@ -6017,8 +6038,8 @@ function viewMeasurementResults(captureId, data) {
     grid.className = 'analysis-grid';
     const items = [
         ['Method', data.detection_method || 'N/A'],
-        ['Height', data.estimated_width_cm ? data.estimated_width_cm + ' cm' : 'N/A'],
-        ['Width', data.estimated_height_cm ? data.estimated_height_cm + ' cm' : 'N/A'],
+        ['Height', data.estimated_height_cm ? data.estimated_height_cm + ' cm' : 'N/A'],
+        ['Width', data.estimated_width_cm ? data.estimated_width_cm + ' cm' : 'N/A'],
         ['Pixels/cm', data.pixels_per_cm || 'N/A'],
     ];
     items.forEach(([label, value]) => {
@@ -6104,7 +6125,7 @@ function viewMeasurementResults(captureId, data) {
             ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
             ctx.fillRect(xmin, ymin, w, h);
             ctx.fillStyle = '#10b981';
-            const heightCm = data.estimated_width_cm;
+            const heightCm = data.estimated_height_cm;
             const label = `Plant (${heightCm ? heightCm + ' cm' : 'height unclear'})`;
             const tw = ctx.measureText(label).width;
             const th = Math.max(16, Math.round(canvas.width * 0.022));

@@ -1969,6 +1969,8 @@ def auto_calibrate_capture(capture_id):
                     'height_cm': result['estimated_height_cm'],
                     'width_cm': result.get('estimated_width_cm'),
                 }
+            if result.get('tof_measurement'):
+                calib['tof_measurement'] = result['tof_measurement']
         except Exception as exc:
             app.logger.exception('Manual calibrate failed for capture %d',
                                  capture_id)

@@ -1228,10 +1228,12 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
                               rotation=0, hflip=False, vflip=False,
                               depth_path=None):
     """
-    Measure using a manually-drawn bounding box (acting as the target object).
+    Measure using a manually-drawn bounding box.
 
-    With ToF enabled, the user can just draw a box around ANYTHING, 
-    and we will instantly calculate its physical size without any reference battery!
+    If reference dimensions are provided (via ref_type or custom inputs), 
+    we use the box as a calibration reference to measure the auto-detected plant.
+    Otherwise, with ToF enabled, we treat the box as the target object and 
+    measure its physical size directly using ToF.
 
     Parameters:
         image_path:    Path to the captured image file
@@ -1273,22 +1275,19 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
     rh = int((ymax_n - ymin_n) / 1000 * h_img)
     ref_bbox_px = (rx, ry, rw, rh)
 
-    logger.info("Manual reference bbox: px=(%d,%d,%d,%d) from norm=%s",
+    logger.info("Manual bbox: px=(%d,%d,%d,%d) from norm=%s",
                  rx, ry, rw, rh, ref_bbox_norm)
 
-    # ── Auto-detect plant ────────────────────────────────────────
-    plant_bbox_px = detect_plant_contour(image, exclude_bbox=ref_bbox_px)
+    # Determine if we have reference dimensions (meaning we are in reference-calibration mode)
+    if ref_type and ref_type in KNOWN_DIMENSIONS:
+        if ref_height_cm is None:
+            ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
+        if ref_width_cm is None:
+            ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
 
-    if plant_bbox_px:
-        px, py, pw, ph = plant_bbox_px
-        result['plant_bbox'] = [
-            int(py / h_img * 1000),
-            int(px / w_img * 1000),
-            int((py + ph) / h_img * 1000),
-            int((px + pw) / w_img * 1000),
-        ]
+    has_ref_dims = (ref_height_cm is not None and ref_height_cm > 0) or (ref_width_cm is not None and ref_width_cm > 0)
 
-    # ── ToF Math Strategy ──────────────────────────
+    # Load ToF depth map
     tof_depth = load_tof_depth_grid(
         depth_path,
         target_shape=(h_img, w_img),
@@ -1296,57 +1295,69 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
         hflip=hflip,
         vflip=vflip
     )
-    
-    if tof_depth is not None:
-        # User drew a box, and we have ToF. Treat the box as the object to measure!
-        cx = rx + rw // 2
-        cy = ry + rh // 2
-        
-        # Prevent out of bounds
-        cx = min(cx, w_img - 1)
-        cy = min(cy, h_img - 1)
-        
-        distance_mm = tof_depth[cy, cx]
-        logger.info("ToF manual box center (%d, %d): %.1f mm", cx, cy, distance_mm)
-        
-        if distance_mm > 0 and distance_mm < 6000:
-            w_cm, h_cm = calculate_physical_size(rw, rh, distance_mm, img_width=w_img, img_height=h_img)
-            result['estimated_height_cm'] = h_cm
-            result['estimated_width_cm'] = w_cm
-            result['detection_method'] = 'tof_physical'
-            
-            # Since the user explicitly drew a box to measure, we can set the plant_bbox
-            # equal to the reference_bbox so the frontend draws it properly.
-            result['plant_bbox'] = ref_bbox_norm
 
-    # ── Legacy Scaling Strategy (if ToF is missing) ────────────
-    if result['detection_method'] != 'tof_physical':
-        if ref_type and ref_type in KNOWN_DIMENSIONS:
-            if ref_height_cm is None:
-                ref_height_cm = KNOWN_DIMENSIONS[ref_type]['height_cm']
-            if ref_width_cm is None:
-                ref_width_cm = KNOWN_DIMENSIONS[ref_type]['width_cm']
+    if has_ref_dims:
+        # Mode A: Use manual box as reference calibration object to measure the auto-detected plant
+        ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
+        ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
+        bbox_long = max(rw, rh)
+        bbox_short = min(rw, rh)
 
-        if (ref_height_cm or ref_width_cm) and rw > 0 and rh > 0:
-            ref_long = max(ref_height_cm or 0, ref_width_cm or 0)
-            ref_short = min(ref_height_cm or 0, ref_width_cm or 0)
-            bbox_long = max(rw, rh)
-            bbox_short = min(rw, rh)
+        if ref_long > 0 and bbox_long > 0:
+            px_per_cm = bbox_long / ref_long
+        elif ref_short > 0 and bbox_short > 0:
+            px_per_cm = bbox_short / ref_short
+        else:
+            px_per_cm = None
 
-            if ref_long > 0 and bbox_long > 0:
-                px_per_cm = bbox_long / ref_long
-            elif ref_short > 0 and bbox_short > 0:
-                px_per_cm = bbox_short / ref_short
-            else:
-                px_per_cm = None
+        if px_per_cm and px_per_cm > 0:
+            result['pixels_per_cm'] = round(px_per_cm, 2)
+            result['detection_method'] = 'battery_manual' if ref_type == 'aa_battery' else 'manual'
 
-            if px_per_cm and px_per_cm > 0:
-                result['pixels_per_cm'] = round(px_per_cm, 2)
+            # Auto-detect the plant green region
+            plant_bbox_px = detect_plant_contour(image, exclude_bbox=ref_bbox_px)
+            if plant_bbox_px:
+                px, py, pw, ph = plant_bbox_px
+                result['plant_bbox'] = [
+                    int(py / h_img * 1000),
+                    int(px / w_img * 1000),
+                    int((py + ph) / h_img * 1000),
+                    int((px + pw) / w_img * 1000),
+                ]
+                result['estimated_height_cm'] = round(ph / px_per_cm, 1)
+                result['estimated_width_cm'] = round(pw / px_per_cm, 1)
 
-                if plant_bbox_px:
-                    _, _, pw, ph = plant_bbox_px
-                    result['estimated_height_cm'] = round(ph / px_per_cm, 1)
-                    result['estimated_width_cm'] = round(pw / px_per_cm, 1)
+                # If ToF is available, also measure the plant using ToF (cross-validation)
+                if tof_depth is not None:
+                    cx = min(px + pw // 2, w_img - 1)
+                    cy = min(py + ph // 2, h_img - 1)
+                    distance_mm = tof_depth[cy, cx]
+                    if 0 < distance_mm < 6000:
+                        w_cm, h_cm = calculate_physical_size(pw, ph, distance_mm, img_width=w_img, img_height=h_img)
+                        result['tof_measurement'] = {
+                            'height_cm': float(h_cm) if h_cm is not None else None,
+                            'width_cm': float(w_cm) if w_cm is not None else None,
+                            'distance_mm': round(float(distance_mm), 1),
+                        }
+    else:
+        # Mode B: Measure the manual box directly using ToF
+        if tof_depth is not None:
+            cx = rx + rw // 2
+            cy = ry + rh // 2
+            cx = min(cx, w_img - 1)
+            cy = min(cy, h_img - 1)
+            distance_mm = tof_depth[cy, cx]
+            logger.info("ToF manual box center (%d, %d): %.1f mm", cx, cy, distance_mm)
+
+            if 0 < distance_mm < 6000:
+                w_cm, h_cm = calculate_physical_size(rw, rh, distance_mm, img_width=w_img, img_height=h_img)
+                result['estimated_height_cm'] = h_cm
+                result['estimated_width_cm'] = w_cm
+                result['detection_method'] = 'tof_physical'
+                result['plant_bbox'] = ref_bbox_norm
+        else:
+            result['error'] = "No depth data or reference dimensions provided for measurement."
+            return result
 
     if tof_depth is not None:
         result['depth_grid'] = generate_tof_depth_grid(tof_depth)

@@ -24,7 +24,7 @@ FRAME_AVG_COUNT = 5
 WARMUP_FRAMES = 12
 
 # CSI indices to try (varies by Pi model and camera port)
-CSI_INDICES = [0, 2, 4, 8]
+CSI_INDICES = [8, 0, 2, 4]
 
 
 def _get_depth_and_confidence(frame):
@@ -99,7 +99,8 @@ def main():
         subprocess.run(
             ['rpicam-still', '-o', 'image.jpg',
              '--width', '1920', '--height', '1080', '-t', '1000'],
-            check=True
+            check=True,
+            timeout=15
         )
     except Exception as e:
         print("Warning: RGB capture failed:", e)

@@ -9,14 +9,14 @@ services:
       - TZ=America/Los_Angeles
       - DATABASE_URL=postgresql://smartgarden:smartgarden_pass@10.0.0.16:5433/smartgarden
       - LLM_SERVICE_URL=http://10.0.0.16:7777/chat?stream=false
-      - LLM_MODEL_NAME=Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16
+      - LLM_MODEL_NAME=qwen3.6
       - FLASK_PORT=5000
       - FLASK_WORKERS=1
       - PI_SSH_HOST=10.0.0.228
       - PI_SSH_USER=braindeadpi
       - PI_SSH_PORT=22
       - VLM_ENDPOINT=http://10.0.0.30:8000/v1/chat/completions
-      - VLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16
+      - VLM_MODEL=qwen3.6
       - VLM_TIMEOUT=45
     volumes:
       - /usr/share/zoneinfo/America/Los_Angeles:/etc/localtime:ro

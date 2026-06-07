@@ -598,7 +598,7 @@ VLM_ENDPOINT = os.environ.get(
     'VLM_ENDPOINT', 'http://10.0.0.30:8000/v1/chat/completions'
 )
 VLM_MODEL = os.environ.get(
-    'VLM_MODEL', 'Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16'
+    'VLM_MODEL', 'qwen3.6'
 )
 VLM_TIMEOUT = int(os.environ.get('VLM_TIMEOUT', '30'))
 

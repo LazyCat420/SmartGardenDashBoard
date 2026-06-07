@@ -456,7 +456,7 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
     if not llm_model:
         llm_model = os.environ.get(
             'LLM_MODEL_NAME',
-            'Kbenkhaled/Qwen3.5-35B-A3B-quantized.w4a16'
+            'qwen3.6'
         )
 
     # Read and base64-encode the image

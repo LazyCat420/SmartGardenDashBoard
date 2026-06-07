@@ -258,6 +258,25 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
             has_depth = False
             logger.warning("depth.npy not found on Pi, proceeding without ToF depth.")
 
+        # Copy the confidence.npy file back (non-fatal if missing)
+        confidence_path = os.path.join(CAPTURES_DIR, f"{filename}_confidence.npy")
+        resolved_conf = os.path.realpath(confidence_path)
+        if resolved_conf.startswith(cap_dir_real):
+            cmd_scp_conf = [
+                'scp',
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'LogLevel=ERROR',
+                '-P', str(ssh_port),
+                f'{ssh_user}@{ssh_host}:~/confidence.npy',
+                resolved_conf
+            ]
+            try:
+                subprocess.run(cmd_scp_conf, check=True)
+                logger.info("Copied confidence.npy for capture %s", filename)
+            except subprocess.CalledProcessError:
+                logger.debug("confidence.npy not found on Pi (older capture script?).")
+
         # Read size for logging
         size_bytes = os.path.getsize(resolved_img)
         logger.info('Captured image: %s.jpg (%d bytes)', filename, size_bytes)

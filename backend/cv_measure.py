@@ -90,8 +90,9 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
     """
     Load physical ToF depth map in millimeters.
     
-    Reads the depth.npy array, scales it to match the RGB image size,
-    and returns it as a numpy array in millimeters.
+    Reads the depth.npy array, optionally applies confidence filtering
+    from the companion confidence.npy file, scales to match the RGB
+    image size, and returns it as a numpy array in millimeters.
     
     Returns:
         numpy.ndarray of depth in millimeters, sized to target_shape
@@ -106,6 +107,39 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
     try:
         depth_buf = np.load(depth_path)
         
+        # ── Load and apply confidence filter if available ────────
+        # The updated capture_rgbd.py saves confidence.npy alongside
+        # depth.npy.  Apply it here to zero out unreliable pixels.
+        conf_path = depth_path.replace('_depth.npy', '_confidence.npy')
+        if not os.path.exists(conf_path):
+            # Also check for non-suffixed companion (Pi-side naming)
+            conf_path_alt = os.path.join(
+                os.path.dirname(depth_path), 'confidence.npy'
+            )
+            if os.path.exists(conf_path_alt):
+                conf_path = conf_path_alt
+            else:
+                conf_path = None
+
+        if conf_path and os.path.exists(conf_path):
+            try:
+                conf_buf = np.load(conf_path)
+                if conf_buf.shape == depth_buf.shape:
+                    low_conf = conf_buf < 30  # Same threshold as capture
+                    zeroed = int(np.sum(low_conf))
+                    if zeroed > 0:
+                        depth_buf[low_conf] = 0
+                        logger.info("Confidence filter applied: zeroed %d/%d "
+                                    "low-confidence pixels (%.1f%%)",
+                                    zeroed, depth_buf.size,
+                                    100 * zeroed / depth_buf.size)
+                else:
+                    logger.warning("Confidence shape %s doesn't match depth "
+                                   "shape %s — skipping filter",
+                                   conf_buf.shape, depth_buf.shape)
+            except Exception as conf_exc:
+                logger.warning("Failed to load confidence map: %s", conf_exc)
+
         # Diagnostic logging — helps verify ToF Near Mode is working
         valid = depth_buf[depth_buf > 0]
         if valid.size > 0:

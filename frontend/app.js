@@ -4957,9 +4957,129 @@ function renderCameraEndpoints() {
         actions.appendChild(reinitBtn);
         actions.appendChild(deleteBtn);
 
+        // ToF physical alignment offset controls
+        const offsetDiv = document.createElement('div');
+        offsetDiv.className = 'tof-offset-controls';
+        offsetDiv.style.marginTop = '8px';
+        offsetDiv.style.marginBottom = '12px';
+        offsetDiv.style.display = 'flex';
+        offsetDiv.style.alignItems = 'center';
+        offsetDiv.style.gap = '12px';
+        offsetDiv.style.flexWrap = 'wrap';
+        offsetDiv.style.borderTop = '1px dashed var(--border)';
+        offsetDiv.style.paddingTop = '8px';
+
+        const offsetTitle = document.createElement('span');
+        offsetTitle.textContent = '📏 ToF Offsets (mm):';
+        offsetTitle.style.fontSize = '12px';
+        offsetTitle.style.fontWeight = 'bold';
+        offsetTitle.style.color = 'var(--text-secondary)';
+        offsetTitle.style.width = '100%';
+        offsetDiv.appendChild(offsetTitle);
+
+        // Vertical Offset
+        const vOffsetGroup = document.createElement('div');
+        vOffsetGroup.style.display = 'flex';
+        vOffsetGroup.style.alignItems = 'center';
+        vOffsetGroup.style.gap = '4px';
+
+        const vOffsetLabel = document.createElement('label');
+        vOffsetLabel.textContent = 'Vert:';
+        vOffsetLabel.style.fontSize = '11px';
+        vOffsetLabel.style.color = 'var(--text-secondary)';
+
+        const vOffsetInput = document.createElement('input');
+        vOffsetInput.type = 'number';
+        vOffsetInput.value = ep.tof_vertical_offset_mm !== undefined ? ep.tof_vertical_offset_mm : 20.0;
+        vOffsetInput.step = '0.5';
+        vOffsetInput.style.width = '55px';
+        vOffsetInput.style.padding = '2px 4px';
+        vOffsetInput.style.fontSize = '11px';
+        vOffsetInput.style.background = 'var(--bg-input)';
+        vOffsetInput.style.border = '1px solid var(--border)';
+        vOffsetInput.style.borderRadius = '4px';
+        vOffsetInput.style.color = 'var(--text-primary)';
+        vOffsetInput.addEventListener('change', async (e) => {
+            const val = parseFloat(e.target.value);
+            if (!isNaN(val)) {
+                await updateCameraOrientation(ep.id, { tof_vertical_offset_mm: val });
+            }
+        });
+
+        vOffsetGroup.appendChild(vOffsetLabel);
+        vOffsetGroup.appendChild(vOffsetInput);
+        offsetDiv.appendChild(vOffsetGroup);
+
+        // Horizontal Offset
+        const hOffsetGroup = document.createElement('div');
+        hOffsetGroup.style.display = 'flex';
+        hOffsetGroup.style.alignItems = 'center';
+        hOffsetGroup.style.gap = '4px';
+
+        const hOffsetLabel = document.createElement('label');
+        hOffsetLabel.textContent = 'Horiz:';
+        hOffsetLabel.style.fontSize = '11px';
+        hOffsetLabel.style.color = 'var(--text-secondary)';
+
+        const hOffsetInput = document.createElement('input');
+        hOffsetInput.type = 'number';
+        hOffsetInput.value = ep.tof_horizontal_offset_mm !== undefined ? ep.tof_horizontal_offset_mm : 0.0;
+        hOffsetInput.step = '0.5';
+        hOffsetInput.style.width = '55px';
+        hOffsetInput.style.padding = '2px 4px';
+        hOffsetInput.style.fontSize = '11px';
+        hOffsetInput.style.background = 'var(--bg-input)';
+        hOffsetInput.style.border = '1px solid var(--border)';
+        hOffsetInput.style.borderRadius = '4px';
+        hOffsetInput.style.color = 'var(--text-primary)';
+        hOffsetInput.addEventListener('change', async (e) => {
+            const val = parseFloat(e.target.value);
+            if (!isNaN(val)) {
+                await updateCameraOrientation(ep.id, { tof_horizontal_offset_mm: val });
+            }
+        });
+
+        hOffsetGroup.appendChild(hOffsetLabel);
+        hOffsetGroup.appendChild(hOffsetInput);
+        offsetDiv.appendChild(hOffsetGroup);
+
+        // Distance Offset
+        const dOffsetGroup = document.createElement('div');
+        dOffsetGroup.style.display = 'flex';
+        dOffsetGroup.style.alignItems = 'center';
+        dOffsetGroup.style.gap = '4px';
+
+        const dOffsetLabel = document.createElement('label');
+        dOffsetLabel.textContent = 'Depth:';
+        dOffsetLabel.style.fontSize = '11px';
+        dOffsetLabel.style.color = 'var(--text-secondary)';
+
+        const dOffsetInput = document.createElement('input');
+        dOffsetInput.type = 'number';
+        dOffsetInput.value = ep.tof_distance_offset_mm !== undefined ? ep.tof_distance_offset_mm : 0.0;
+        dOffsetInput.step = '0.5';
+        dOffsetInput.style.width = '55px';
+        dOffsetInput.style.padding = '2px 4px';
+        dOffsetInput.style.fontSize = '11px';
+        dOffsetInput.style.background = 'var(--bg-input)';
+        dOffsetInput.style.border = '1px solid var(--border)';
+        dOffsetInput.style.borderRadius = '4px';
+        dOffsetInput.style.color = 'var(--text-primary)';
+        dOffsetInput.addEventListener('change', async (e) => {
+            const val = parseFloat(e.target.value);
+            if (!isNaN(val)) {
+                await updateCameraOrientation(ep.id, { tof_distance_offset_mm: val });
+            }
+        });
+
+        dOffsetGroup.appendChild(dOffsetLabel);
+        dOffsetGroup.appendChild(dOffsetInput);
+        offsetDiv.appendChild(dOffsetGroup);
+
         card.appendChild(header);
         card.appendChild(info);
         card.appendChild(orientationDiv);
+        card.appendChild(offsetDiv);
         card.appendChild(actions);
         container.appendChild(card);
     });
@@ -5012,7 +5132,7 @@ function populateCameraSelects() {
 }
 
 function showAddCameraEndpointModal() {
-    showModal('\ud83d\udcf8 Add Camera Endpoint', `
+    showModal('📷 Add Camera Endpoint', `
         <div class="form-group">
             <label for="camName">Camera Name *</label>
             <input type="text" id="camName" placeholder="e.g., Garden Pi Camera 1">
@@ -5055,8 +5175,22 @@ function showAddCameraEndpointModal() {
                 </label>
             </div>
         </div>
+        <div class="form-row" style="margin-bottom: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+            <div class="form-group">
+                <label for="camTofVerticalOffset">ToF Vertical Offset (mm)</label>
+                <input type="number" id="camTofVerticalOffset" value="20.0" step="0.5">
+            </div>
+            <div class="form-group">
+                <label for="camTofHorizontalOffset">ToF Horizontal Offset (mm)</label>
+                <input type="number" id="camTofHorizontalOffset" value="0.0" step="0.5">
+            </div>
+            <div class="form-group">
+                <label for="camTofDistanceOffset">ToF Depth Offset (mm)</label>
+                <input type="number" id="camTofDistanceOffset" value="0.0" step="0.5">
+            </div>
+        </div>
         <div class="form-actions">
-            <button class="btn btn-primary" onclick="saveCameraEndpoint()">\ud83d\udcbe Save Camera</button>
+            <button class="btn btn-primary" onclick="saveCameraEndpoint()">💾 Save Camera</button>
         </div>
     `);
 }
@@ -5070,6 +5204,9 @@ async function saveCameraEndpoint() {
     const rotation = parseInt(document.getElementById('camRotation').value) || 0;
     const hflip = document.getElementById('camHFlip').checked;
     const vflip = document.getElementById('camVFlip').checked;
+    const tof_vertical_offset_mm = parseFloat(document.getElementById('camTofVerticalOffset').value) || 20.0;
+    const tof_horizontal_offset_mm = parseFloat(document.getElementById('camTofHorizontalOffset').value) || 0.0;
+    const tof_distance_offset_mm = parseFloat(document.getElementById('camTofDistanceOffset').value) || 0.0;
 
     if (!name || !host) {
         showToast('Name and SSH host are required', 'error');
@@ -5083,7 +5220,10 @@ async function saveCameraEndpoint() {
             body: JSON.stringify({
                 name, ssh_host: host, ssh_user: user,
                 ssh_port: port, capture_command: command,
-                rotation, hflip, vflip
+                rotation, hflip, vflip,
+                tof_vertical_offset_mm,
+                tof_horizontal_offset_mm,
+                tof_distance_offset_mm
             })
         });
 

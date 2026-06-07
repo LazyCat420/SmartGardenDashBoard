@@ -211,6 +211,29 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
     if not resolved_img.startswith(cap_dir_real) or not resolved_depth.startswith(cap_dir_real):
         return {'success': False, 'message': 'Invalid capture path'}
 
+    # Ensure capture_rgbd.py on the Pi matches the latest in the container
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(backend_dir)
+    local_script_path = os.path.join(root_dir, 'capture_rgbd.py')
+    if not os.path.exists(local_script_path):
+        local_script_path = '/app/capture_rgbd.py'
+
+    if os.path.exists(local_script_path):
+        cmd_scp_script = [
+            'scp',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'LogLevel=ERROR',
+            '-P', str(ssh_port),
+            local_script_path,
+            f'{ssh_user}@{ssh_host}:~/capture_rgbd.py'
+        ]
+        try:
+            logger.info("Syncing latest capture_rgbd.py to Pi %s...", ssh_host)
+            subprocess.run(cmd_scp_script, check=True, timeout=10)
+        except Exception as e:
+            logger.warning("Failed to sync capture_rgbd.py to Pi: %s", e)
+
     cmd_trigger = [
         'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
@@ -379,7 +402,8 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
                   last_height=None, llm_url=None, llm_model=None,
                   rotation=0, hflip=False, vflip=False,
                   ref_width_cm=None, ref_height_cm=None,
-                  reference_type=None, depth_path=None):
+                  reference_type=None, depth_path=None,
+                  offset_x_mm=None, offset_y_mm=None, distance_offset_mm=None):
     """Analyze a captured plant image using YOLO/OpenCV for measurement
     and the Vision LLM for health/species analysis.
 
@@ -407,7 +431,10 @@ def analyze_image(image_path, plant_name=None, plant_variety=None,
             rotation=rotation,
             hflip=hflip,
             vflip=vflip,
-            depth_path=depth_path
+            depth_path=depth_path,
+            offset_x_mm=offset_x_mm,
+            offset_y_mm=offset_y_mm,
+            distance_offset_mm=distance_offset_mm
         )
         logger.info("CV measurement result: success=%s method=%s height=%s width=%s",
                      measurement.get('success'),

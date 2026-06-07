@@ -1057,8 +1057,8 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
                 pw, ph, distance_mm, img_width=w_img, img_height=h_img
             )
             result['tof_measurement'] = {
-                'height_cm': h_cm,
-                'width_cm': w_cm,
+                'height_cm': float(h_cm) if h_cm is not None else None,
+                'width_cm': float(w_cm) if w_cm is not None else None,
                 'distance_mm': round(float(distance_mm), 1),
             }
 

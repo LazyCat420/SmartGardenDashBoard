@@ -86,7 +86,7 @@ def _get_yolo_model():
 
 # ── ToF Depth Loader ─────────────────────────────────────────────
 
-def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
+def load_tof_depth_grid(depth_path, target_shape=(1080, 1920), rotation=0, hflip=False, vflip=False):
     """
     Load physical ToF depth map in millimeters.
     
@@ -154,6 +154,19 @@ def load_tof_depth_grid(depth_path, target_shape=(1080, 1920)):
                           depth_buf.shape)
             return None
         
+        # Apply same flips/rotations as RGB camera
+        if hflip:
+            depth_buf = cv2.flip(depth_buf, 1)
+        if vflip:
+            depth_buf = cv2.flip(depth_buf, 0)
+
+        if rotation == 90:
+            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_90_CLOCKWISE)
+        elif rotation == 180:
+            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_180)
+        elif rotation == 270:
+            depth_buf = cv2.rotate(depth_buf, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
         # ToF array is usually 240x180. Resize to match RGB (1920x1080)
         # INTER_NEAREST to avoid interpolating invalid edge depths,
         # but INTER_LINEAR gives smoother depth maps for bounding boxes.
@@ -1025,7 +1038,13 @@ def detect_and_calibrate(image_path, rotation=0, hflip=False, vflip=False,
             }
 
     # ── ToF cross-validation ─────────────────────────────────────
-    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+    tof_depth = load_tof_depth_grid(
+        depth_path,
+        target_shape=(h_img, w_img),
+        rotation=rotation,
+        hflip=hflip,
+        vflip=vflip
+    )
 
     if tof_depth is not None and plant_bbox_px:
         px, py, pw, ph = plant_bbox_px
@@ -1137,7 +1156,13 @@ def measure_objects(image_path, ref_type=None,
     # ── Step 4: Calculate real-world dimensions ──────────────────
     
     # Load ToF depth map
-    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+    tof_depth = load_tof_depth_grid(
+        depth_path,
+        target_shape=(h_img, w_img),
+        rotation=rotation,
+        hflip=hflip,
+        vflip=vflip
+    )
     
     # ── ToF Math Strategy ──────────────────────────────────────────
     if tof_depth is not None and plant_bbox_px:
@@ -1264,7 +1289,13 @@ def measure_with_manual_bbox(image_path, ref_bbox_norm, ref_type=None,
         ]
 
     # ── ToF Math Strategy ──────────────────────────
-    tof_depth = load_tof_depth_grid(depth_path, target_shape=(h_img, w_img))
+    tof_depth = load_tof_depth_grid(
+        depth_path,
+        target_shape=(h_img, w_img),
+        rotation=rotation,
+        hflip=hflip,
+        vflip=vflip
+    )
     
     if tof_depth is not None:
         # User drew a box, and we have ToF. Treat the box as the object to measure!

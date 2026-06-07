@@ -2115,6 +2115,24 @@ def get_capture_depth(capture_id):
 
         depth = np.load(resolved)
 
+        # Apply same flips/rotations as RGB camera
+        endpoint = CameraEndpoint.query.get(capture.endpoint_id)
+        rotation = endpoint.rotation if endpoint else 0
+        hflip = endpoint.hflip if endpoint else False
+        vflip = endpoint.vflip if endpoint else False
+
+        if hflip:
+            depth = cv2.flip(depth, 1)
+        if vflip:
+            depth = cv2.flip(depth, 0)
+
+        if rotation == 90:
+            depth = cv2.rotate(depth, cv2.ROTATE_90_CLOCKWISE)
+        elif rotation == 180:
+            depth = cv2.rotate(depth, cv2.ROTATE_180)
+        elif rotation == 270:
+            depth = cv2.rotate(depth, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
         # Clamp to valid ToF range (0-6000mm) and normalize to 0-255
         depth_clamped = np.clip(depth, 0, 6000).astype(np.float32)
         valid_mask = depth_clamped > 0

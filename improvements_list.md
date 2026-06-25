@@ -1,1 +1,0 @@
-1. In settings allow the user to be able to change the context length of the model/gpu offload/cpu thread pool size. Look up lmstudio docs online on how to change it via api and give the user a frontend UI that allows the user to change those settings with a slider. 

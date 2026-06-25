@@ -43,7 +43,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # ── Copy backend source ──────────────────────────────────────
 COPY backend/ ./backend/
-COPY capture_rgbd.py ./capture_rgbd.py
+COPY scripts/capture_rgbd.py ./capture_rgbd.py
 
 # ── Pre-download YOLOv8-nano model ───────────────────────────
 # Downloads at build time so the container works offline.

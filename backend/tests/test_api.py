@@ -26,13 +26,6 @@ def client():
 class TestLLMModelsEndpoint:
     """Tests for the /api/llm/models endpoint"""
     
-    def test_models_endpoint_exists(self, client):
-        """Test that the models endpoint exists"""
-        # This will fail with connection error if LMStudio not running
-        # but we're testing the endpoint exists
-        response = client.get('/api/llm/models')
-        assert response.status_code in [200, 500]  # 500 if LMStudio not running
-    
     @patch('main_md.requests.get')
     def test_models_openai_format_parsing(self, mock_get, client):
         """Test that OpenAI-style response format is parsed correctly"""
@@ -164,17 +157,18 @@ class TestLeaderboardEndpoint:
         # First get all plants to find a valid category
         response = client.get('/api/plants')
         plants = json.loads(response.data)
-        
-        if plants:
-            category = plants[0].get('name', '').lower()
-            if category:
-                response = client.get(f'/api/leaderboard?category={category}')
-                assert response.status_code == 200
-                
-                data = json.loads(response.data)
-                # All returned plants should be in this category
-                for ranking in data['rankings']:
-                    assert ranking['category'] == category
+
+        if not plants or not plants[0].get('name'):
+            pytest.skip("No plants in database to derive a category from")
+
+        category = plants[0]['name'].lower()
+        response = client.get(f'/api/leaderboard?category={category}')
+        assert response.status_code == 200
+
+        data = json.loads(response.data)
+        # All returned plants should be in this category
+        for ranking in data['rankings']:
+            assert ranking['category'] == category
     
     def test_leaderboard_rankings_are_sorted(self, client):
         """Test that rankings are properly sorted by metric"""

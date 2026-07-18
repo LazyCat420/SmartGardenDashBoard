@@ -28,6 +28,19 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'llm_se
 
 # Default LMStudio API configuration
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
+
+# Prism (the shared AI gateway) attributes every request by the x-project /
+# x-username HTTP HEADERS — it ignores project/username sent in the JSON body.
+# Requests without them are filed under prism's catch-all "default"/"anonymous"
+# project. The configured LLM URL can point at prism (LLM_SERVICE_URL in
+# docker-compose.yml is http://10.0.0.16:7778/chat), so every outbound LLM call
+# sends these; non-prism endpoints simply ignore the extra headers.
+PRISM_PROJECT = os.environ.get("PRISM_PROJECT", "smart-garden")
+PRISM_USERNAME = os.environ.get("PRISM_USERNAME", "admin")
+PRISM_ATTRIBUTION_HEADERS = {
+    "x-project": PRISM_PROJECT,
+    "x-username": PRISM_USERNAME,
+}
 DEFAULT_MODEL_NAME = "ibm-granite/granite-3.3-8b-instruct"
 DEFAULT_CONTEXT_LENGTH = 8192
 DEFAULT_GPU_LAYERS = 35
@@ -551,7 +564,7 @@ class LLMService:
         try:
             llm_logger.info(f"Sending request to {self.base_url}...")
             
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 
@@ -734,7 +747,7 @@ class LLMService:
             # First, try a simple request
             llm_logger.debug("Sending test request...")
             
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 
@@ -817,7 +830,7 @@ class LLMService:
         }]
         
         try:
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
                 

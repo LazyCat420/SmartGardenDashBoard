@@ -345,6 +345,10 @@ class CaptureSchedule(db.Model):
 LMSTUDIO_URL = os.environ.get('LLM_SERVICE_URL', 'http://localhost:1234/v1/chat/completions')
 MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'ibm-granite/granite-3.3-8b-instruct')
 
+# Prism attributes requests by the x-project / x-username HTTP headers only —
+# LLM_SERVICE_URL points at the prism gateway in docker-compose.yml.
+from backend.llm_service import PRISM_ATTRIBUTION_HEADERS
+
 # Try to load settings from file
 # Try to load settings from file - REVERTED
 # try:
@@ -1289,7 +1293,7 @@ def llm_status():
                 settings = json.load(f)
                 api_key = settings.get("api_key", "")
                 
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
             
@@ -1427,7 +1431,7 @@ def process_note():
                 settings = json.load(f)
                 api_key = settings.get("api_key", "")
                 
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
             

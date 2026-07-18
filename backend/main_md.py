@@ -54,6 +54,14 @@ CORS(app)
 
 
 LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
+
+# Prism attributes requests by the x-project / x-username HTTP headers only —
+# body project/username fields are ignored, so callers without these headers get
+# filed under prism's catch-all "default"/"anonymous" project.
+PRISM_ATTRIBUTION_HEADERS = {
+    "x-project": os.environ.get("PRISM_PROJECT", "smart-garden"),
+    "x-username": os.environ.get("PRISM_USERNAME", "admin"),
+}
 MODEL_NAME = "granite-3.2-8b-instruct"
 
 
@@ -430,7 +438,7 @@ RULES:
         if ENDPOINT_TYPE != 'vllm':
             payload["max_tokens"] = -1
         
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
         if API_KEY:
             headers["Authorization"] = f"Bearer {API_KEY}"
             
@@ -512,7 +520,7 @@ def test_tools():
             "temperature": 0.1
         }
         
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **PRISM_ATTRIBUTION_HEADERS}
         if API_KEY:
             headers["Authorization"] = f"Bearer {API_KEY}"
             

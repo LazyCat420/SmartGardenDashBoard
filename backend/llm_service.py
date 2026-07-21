@@ -33,7 +33,7 @@ DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1/chat/completions"
 # x-username HTTP HEADERS — it ignores project/username sent in the JSON body.
 # Requests without them are filed under prism's catch-all "default"/"anonymous"
 # project. The configured LLM URL can point at prism (LLM_SERVICE_URL in
-# docker-compose.yml is http://10.0.0.16:7778/chat), so every outbound LLM call
+# docker-compose.yml is http://10.0.0.16:7777/chat), so every outbound LLM call
 # sends these; non-prism endpoints simply ignore the extra headers.
 PRISM_PROJECT = os.environ.get("PRISM_PROJECT", "smart-garden")
 PRISM_USERNAME = os.environ.get("PRISM_USERNAME", "admin")

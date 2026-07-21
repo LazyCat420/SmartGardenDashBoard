@@ -356,7 +356,7 @@ def get_prism_settings():
     config = projects_data.get("config", {})
     default_host = projects_data.get("defaultHost", "10.0.0.16")
     
-    prism_url = os.environ.get("PRISM_URL") or config.get("PRISM_URL") or f"http://{default_host}:7778"
+    prism_url = os.environ.get("PRISM_URL") or config.get("PRISM_URL") or f"http://{default_host}:7777"
     # Attribution: this is the garden dashboard, not the trading bot. Deliberately
     # NOT read from projects.json — its shared PRISM_PROJECT is "vllm-trading-bot"
     # for every repo, which filed garden vision calls under the trading project.

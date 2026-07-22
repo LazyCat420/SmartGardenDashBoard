@@ -565,6 +565,11 @@ def parse_date(date_str):
 
 
 def find_or_create_plant(name):
+    name = (name or '').strip()
+    if not name:
+        # Creating Plant(name=None) blows up at flush and poisons the batch;
+        # "" writes a blank-named plant. Fail this action loudly instead.
+        raise ValueError("action requires a plant_name")
     plant = Plant.query.filter(Plant.name.ilike(f"%{name}%")).first()
     if not plant:
         plant = Plant(name=name, status='active')
@@ -576,8 +581,12 @@ def find_or_create_plant(name):
 def apply_action(action_type, params):
     """Apply a single extracted action to the database."""
     if action_type == "add_plant":
+        _name = (params.get('name') or '').strip()
+        if not _name:
+            # NULL name = IntegrityError at commit; "" = a blank-named plant row.
+            raise ValueError("add_plant requires a non-empty plant name")
         plant = Plant(
-            name=params.get('name'),
+            name=_name,
             variety=params.get('variety'),
             location=params.get('location'),
             date_planted=parse_date(params.get('date_planted')),
@@ -780,6 +789,10 @@ def update_plant(plant_id):
     data = request.json
     for key in ['name', 'variety', 'location', 'status', 'notes', 'image_url']:
         if key in data:
+            # name is NOT NULL and must stay non-empty: a PUT carrying
+            # {"name": ""} clobbered the name; {"name": null} 500'd at commit.
+            if key == 'name' and not (data[key] or '').strip():
+                continue
             setattr(plant, key, data[key])
     for key in ['date_planted', 'date_germinated', 'expected_harvest']:
         if key in data and data[key]:
@@ -1507,11 +1520,17 @@ def apply_actions():
     for action in actions:
         try:
             result = apply_action(action.get('action'), action.get('parameters', {}))
+            # Commit PER ACTION, inside the try: success used to be reported at
+            # session.add() time with one commit outside any try — a failing
+            # commit (e.g. NULL plant name) rolled back the whole batch AFTER
+            # every action had already been reported successful, and one bad
+            # action poisoned the session for all the others.
+            db.session.commit()
             results.append(result)
         except Exception as e:
+            db.session.rollback()
             results.append({"action": action.get('action'), "success": False, "error": str(e)})
-    
-    db.session.commit()
+
     return jsonify({"results": results})
 
 

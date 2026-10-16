@@ -2,7 +2,7 @@
 # ============================================================
 # Smart Garden Dashboard — Build & Deploy to Synology NAS
 #
-# Thin wrapper — all logic lives in ../deploy-kit/lib.sh
+# Thin wrapper — all logic lives in ../../deploy-kit/lib.sh
 #
 # Usage:
 #   npm run deploy              # full deploy
@@ -40,4 +40,4 @@ EXTRA_SSH_SYNC() {
   ok "Remote directories and SSH keys ready"
 }
 
-source "${SCRIPT_DIR}/../deploy-kit/lib.sh"
+source "${SCRIPT_DIR}/../../deploy-kit/lib.sh"

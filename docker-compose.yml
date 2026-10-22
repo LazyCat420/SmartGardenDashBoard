@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       - TZ=America/Los_Angeles
-      - DATABASE_URL=postgresql://smartgarden:smartgarden_pass@10.0.0.16:5433/smartgarden
+      - DATABASE_URL=${SMARTGARDEN_DATABASE_URL:?SMARTGARDEN_DATABASE_URL must be set in deploy-kit/.env.deploy}
       - LLM_SERVICE_URL=http://10.0.0.16:7777/chat?stream=false
       - LLM_MODEL_NAME=qwen3.6
       - FLASK_PORT=5000

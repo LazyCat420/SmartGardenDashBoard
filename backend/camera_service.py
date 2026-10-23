@@ -11,6 +11,7 @@ import uuid
 import base64
 import json
 import logging
+import re
 from datetime import datetime
 
 import requests as http_requests
@@ -32,6 +33,48 @@ SSH_OPTS = [
 ]
 
 
+# --- Input hardening (2026-10-22) -------------------------------------------
+# ssh_user/ssh_host/capture_command come from the camera-endpoint API. A value
+# starting with '-' (e.g. ssh_user='-oProxyCommand=...') would be parsed by
+# ssh/scp as an option and run commands in this container, so every ssh/scp
+# call validates first and puts '--' before the destination.
+_SSH_USER_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$')
+_SSH_HOST_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$')
+
+# Commands an endpoint may run on the Pi. Extra entries (exact strings) can be
+# added with CAMERA_CAPTURE_COMMANDS, separated by '||'.
+DEFAULT_CAPTURE_COMMANDS = (
+    'rpicam-still -o - --width 1920 --height 1080 -t 1000',
+    '~/tof_env/bin/python ~/capture_rgbd.py',
+)
+
+
+def allowed_capture_commands():
+    extra = [c.strip() for c in os.environ.get('CAMERA_CAPTURE_COMMANDS', '').split('||') if c.strip()]
+    return set(DEFAULT_CAPTURE_COMMANDS) | set(extra)
+
+
+def validate_ssh_target(ssh_host, ssh_user, ssh_port):
+    """Return an error message if the SSH target is unsafe, else None."""
+    if not isinstance(ssh_user, str) or not _SSH_USER_RE.match(ssh_user):
+        return 'Invalid SSH user'
+    if not isinstance(ssh_host, str) or not _SSH_HOST_RE.match(ssh_host):
+        return 'Invalid SSH host'
+    try:
+        port = int(ssh_port)
+    except (TypeError, ValueError):
+        return 'Invalid SSH port'
+    if not 1 <= port <= 65535:
+        return 'Invalid SSH port'
+    return None
+
+
+def validate_capture_command(capture_command):
+    if capture_command not in allowed_capture_commands():
+        return 'Capture command is not in the allowlist (CAMERA_CAPTURE_COMMANDS)'
+    return None
+
+
 def ensure_captures_dir():
     """Ensure the captures directory exists."""
     os.makedirs(CAPTURES_DIR, exist_ok=True)
@@ -47,10 +90,16 @@ def test_connection(ssh_host, ssh_user='pi', ssh_port=22):
 
     Returns dict with 'reachable' bool, 'camera_available' bool, and 'message' string.
     """
+    _err = validate_ssh_target(ssh_host, ssh_user, ssh_port)
+    if _err:
+        logger.warning('Refusing SSH call: %s', _err)
+        return {'reachable': False, 'camera_available': False, 'message': _err}
+
     # Phase 1: SSH connectivity
     cmd = [
         'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
+        '--',
         f'{ssh_user}@{ssh_host}',
         'echo OK'
     ]
@@ -78,6 +127,7 @@ def test_connection(ssh_host, ssh_user='pi', ssh_port=22):
     cam_cmd = [
         'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
+        '--',
         f'{ssh_user}@{ssh_host}',
         'libcamera-hello --list-cameras 2>&1 || rpicam-hello --list-cameras 2>&1 || echo NO_CAMERAS'
     ]
@@ -126,6 +176,11 @@ def reinitialize_camera(ssh_host, ssh_user='pi', ssh_port=22):
 
     Returns dict with 'success' bool and 'message'/'output' strings.
     """
+    _err = validate_ssh_target(ssh_host, ssh_user, ssh_port)
+    if _err:
+        logger.warning('Refusing SSH call: %s', _err)
+        return {'success': False, 'message': _err}
+
     # Chain of commands to reload the camera stack:
     #   1. Unload and reload the arducam module (if present)
     #   2. Restart the libcamera-related services
@@ -145,6 +200,7 @@ def reinitialize_camera(ssh_host, ssh_user='pi', ssh_port=22):
     cmd = [
         'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
+        '--',
         f'{ssh_user}@{ssh_host}',
         reinit_script
     ]
@@ -195,6 +251,15 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
     then copies both files back to the NAS.
     Returns dict with 'success', 'image_path', 'depth_path', 'filename', and 'message'.
     """
+    _err = validate_ssh_target(ssh_host, ssh_user, ssh_port)
+    if _err:
+        logger.warning('Refusing SSH call: %s', _err)
+        return {'success': False, 'message': _err}
+    _err = validate_capture_command(capture_command)
+    if _err:
+        logger.warning('Refusing capture: %s', _err)
+        return {'success': False, 'message': _err}
+
     ensure_captures_dir()
 
     # Generate a unique filename using UUID to prevent path traversal
@@ -225,6 +290,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
             '-o', 'UserKnownHostsFile=/dev/null',
             '-o', 'LogLevel=ERROR',
             '-P', str(ssh_port),
+            '--',
             local_script_path,
             f'{ssh_user}@{ssh_host}:~/capture_rgbd.py'
         ]
@@ -237,6 +303,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
     cmd_trigger = [
         'ssh', *SSH_OPTS,
         '-p', str(ssh_port),
+        '--',
         f'{ssh_user}@{ssh_host}',
         capture_command
     ]
@@ -259,6 +326,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
             '-o', 'UserKnownHostsFile=/dev/null',
             '-o', 'LogLevel=ERROR',
             '-P', str(ssh_port),
+            '--',
             f'{ssh_user}@{ssh_host}:~/image.jpg',
             resolved_img
         ]
@@ -271,6 +339,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
             '-o', 'UserKnownHostsFile=/dev/null',
             '-o', 'LogLevel=ERROR',
             '-P', str(ssh_port),
+            '--',
             f'{ssh_user}@{ssh_host}:~/depth.npy',
             resolved_depth
         ]
@@ -291,6 +360,7 @@ def capture_image(ssh_host, ssh_user='pi', ssh_port=22,
                 '-o', 'UserKnownHostsFile=/dev/null',
                 '-o', 'LogLevel=ERROR',
                 '-P', str(ssh_port),
+                '--',
                 f'{ssh_user}@{ssh_host}:~/confidence.npy',
                 resolved_conf
             ]

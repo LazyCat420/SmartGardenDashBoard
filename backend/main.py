@@ -1587,6 +1587,8 @@ from backend.camera_service import test_connection as cam_test_connection
 from backend.camera_service import capture_image as cam_capture_image
 from backend.camera_service import analyze_image as cam_analyze_image
 from backend.camera_service import reinitialize_camera as cam_reinitialize_camera
+from backend.camera_service import validate_ssh_target as cam_validate_ssh_target
+from backend.camera_service import validate_capture_command as cam_validate_capture_command
 # cv_measure is imported lazily inside measure_capture() to avoid
 # crashing the app at startup if OpenCV system libs are missing.
 
@@ -1625,6 +1627,12 @@ def create_camera_endpoint():
     ssh_host = data['ssh_host'].strip()
     if not ssh_host or len(ssh_host) > 200:
         return jsonify({'error': 'Invalid SSH host'}), 400
+
+    _ssh_user = data.get('ssh_user', 'pi')
+    _capture = data.get('capture_command', 'rpicam-still -o - --width 1920 --height 1080 -t 1000')
+    _err = cam_validate_ssh_target(ssh_host, _ssh_user, data.get('ssh_port', 22)) or cam_validate_capture_command(_capture)
+    if _err:
+        return jsonify({'error': _err}), 400
 
     endpoint = CameraEndpoint(
         name=data['name'][:100],
@@ -1675,6 +1683,10 @@ def update_camera_endpoint(endpoint_id):
     if 'tof_distance_offset_mm' in data:
         endpoint.tof_distance_offset_mm = float(data['tof_distance_offset_mm']) if data['tof_distance_offset_mm'] is not None else 0.0
 
+    _err = cam_validate_ssh_target(endpoint.ssh_host, endpoint.ssh_user, endpoint.ssh_port) or cam_validate_capture_command(endpoint.capture_command)
+    if _err:
+        db.session.rollback()
+        return jsonify({'error': _err}), 400
     db.session.commit()
     return jsonify(endpoint.to_dict())
 

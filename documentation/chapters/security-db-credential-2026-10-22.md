@@ -11,3 +11,6 @@
 | Ticket | Root cause | Commit |
 |---|---|---|
 | Live DB password in public compose file | DSN written inline in `docker-compose.yml` | see `git log -- docker-compose.yml` (2026-10-22) |
+
+## Follow-up: the redeploy crash-looped (SQLAlchemy 2.1)
+The first image built after the rotation crash-looped with `ModuleNotFoundError: No module named 'psycopg'`. SQLAlchemy was not pinned, so the rebuild pulled 2.1.6, whose default driver for `postgresql://` is psycopg (v3); the image ships psycopg2. The earlier pin pass missed it because its tests ran on SQLite. The NAS was rolled back to the `:previous` image (SQLAlchemy 2.0.51) with the new credential, and `SQLAlchemy==2.0.51` is now pinned (verified: connects to the real database through psycopg2). The broken image is kept on the NAS as `smartgarden-dashboard:broken-37b0157`.

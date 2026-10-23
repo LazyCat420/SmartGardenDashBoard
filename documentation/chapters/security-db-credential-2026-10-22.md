@@ -1,4 +1,12 @@
+---
+part: Runtime
+status: shipped
+updated: 2026-10-23
+---
+
 # Database credential out of the public compose file (2026-10-22)
+
+**Review 2026-10-23: shipped, not verified.** On `main` and pushed: `37b0157` (DSN from `SMARTGARDEN_DATABASE_URL`), `d54a56c` (SQLAlchemy 2.0.51 pin), `4f552b2` (`validate_ssh_target`, tests in `backend/tests/test_camera_security.py`). This review did not check the NAS: which image runs there, and whether the SSH fix is deployed, are unconfirmed. Still open: the routes have no auth, and `smartgarden-dashboard:broken-37b0157` is still on the NAS.
 
 ## What happened
 `docker-compose.yml` carried the full Postgres DSN for the `smartgarden` role (host 10.0.0.16:5433) as a literal since 2026-06-04 (`4a98f4b`). This repo is public, so the password was published. A liveness check on 2026-10-22 found it still accepted. The role is not a superuser; it can read and write only the `smartgarden` database (12 tables). It sees no `trading_bot` tables, but like every role it can create tables in `trading_bot_test` (PUBLIC default).
